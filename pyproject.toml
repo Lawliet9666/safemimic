@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safetymimic"
+version = "0.1.0"
+description = "Whole-body safety layers for policy learning through learned dynamics"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.5", "numpy", "mujoco>=3.3", "qpth==0.0.18", "scipy", "safetensors"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+assets = ["huggingface_hub>=0.33.4,<2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+

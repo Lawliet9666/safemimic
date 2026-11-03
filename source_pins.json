@@ -1,0 +1,11 @@
+{
+  "supermimic": {
+    "repository": "https://github.com/Manouselis/supermimic_vibed_fork.git",
+    "revision": "d0c7920f5bc3f3581acebe08e7424fb0c681d193"
+  },
+  "isaaclab": {
+    "repository": "https://github.com/isaac-sim/IsaacLab.git",
+    "revision": "46d6cc3d7b115906fad12efd372fbf69f4e3d3ed"
+  },
+  "runtime_adjustment": "PyTorch 2.11.0 cu128 and Warp 1.17.0 cu12 preserve versions while supporting host driver 570.211.01."
+}

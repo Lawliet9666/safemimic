@@ -1,0 +1,19 @@
+diff --git a/supermimic/env.py b/supermimic/env.py
+index 1cdba6f..9393e1c 100644
+--- a/supermimic/env.py
++++ b/supermimic/env.py
+@@ -51,11 +51,13 @@ class TrackingSim:
+     Must be constructed inside ``launch_simulation(sim_cfg, ...)`` with ``sim_cfg`` from :func:`make_sim`.
+     """
+ 
++    scene_cfg_type = TrackingSceneCfg
++
+     def __init__(self, sim_cfg, num_envs: int, motion: MotionLib, mdp: MDP, gamma: float = 0.99, eval_mode: bool = False,
+                  max_episode_steps: int = 500, reset_noise: bool = True):
+         self.device = sim_cfg.device
+         self.sim = SimulationContext(sim_cfg)
+-        self.scene = instantiate(TrackingSceneCfg(num_envs=num_envs, env_spacing=0.0, replicate_physics=True))
++        self.scene = instantiate(self.scene_cfg_type(num_envs=num_envs, env_spacing=0.0, replicate_physics=True))
+         self.sim.reset()
+         self.robot = self.scene["robot"]
+         assert list(self.robot.joint_names) == G1_JOINT_NAMES, self.robot.joint_names

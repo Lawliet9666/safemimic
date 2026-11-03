@@ -1,0 +1,12 @@
+.venv/
+.cache/
+vendor/
+data/
+checkpoints/
+runs/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.log
+.ruff_cache/
+outputs/
