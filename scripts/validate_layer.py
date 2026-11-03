@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--linearization_steps", type=int, default=1)
+    parser.add_argument("--linearization_steps", type=int, default=16)
+    parser.add_argument("--step_trust_radius", type=float, default=0.15)
     parser.add_argument("--velocity_time", type=float, default=0.15)
     parser.add_argument("--anticipation_mode", choices=["all", "threat"], default="all")
     parser.add_argument("--residual_margin", type=float, default=0.0)
@@ -58,6 +59,7 @@ def main():
         geometry,
         SafetyConfig(
             linearization_steps=args.linearization_steps,
+            step_trust_radius=args.step_trust_radius,
             velocity_time=args.velocity_time,
             anticipation_mode=args.anticipation_mode,
             residual_margin=args.residual_margin,
@@ -113,12 +115,16 @@ def main():
         "gradient_norm": float(gradient.detach().norm()),
         "finite_gradients": True,
         "filter_failures": result.failed.tolist(),
+        "min_initial_barrier": layer.barrier(state, ball).amin(-1).detach().tolist(),
+        "min_initial_geometric_clearance": result.clearance.amin(-1).detach().tolist(),
+        "min_nominal_nonlinear_residual": result.initial_residual.amin(-1).tolist(),
         "qp_failures": result.qp.failed.tolist(),
         "min_affine_residual": result.qp.affine_residual.amin(-1).detach().tolist(),
         "max_slack": result.qp.slack.amax(-1).detach().tolist(),
         "min_nonlinear_residual": result.nonlinear_residual.amin(-1).detach().tolist(),
         "intervention_norm": (result.qp.action - nominal).norm(dim=-1).detach().tolist(),
         "scope": "synthetic incoming-ball states; numerical validation, not a success benchmark",
+        "failure_meaning": "no unrelaxed feasible action found; not proof of infeasibility",
     }
     report["geometric_constraint"] = True
     report["world_model"] = str(args.world_model)

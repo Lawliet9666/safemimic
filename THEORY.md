@@ -43,6 +43,22 @@ violations remain explicit failures; solver failure is not proof of infeasibilit
 Unbounded nonnegative slack makes the relaxed problem feasible for finite
 coefficients and a nonempty hard action box. Relaxation does not establish safety.
 
+Successive local QPs are globalized with backtracking on the true nonlinear
+merit `sum(relu(residual_margin-r(a))) + ||a-a_nom||^2/(2*rho)`.
+The accepted interpolation supplies the next linearization point; the returned
+action is a solved QP candidate, so its affine residual and slack remain aligned.
+The layer preserves the best nonlinear-valid candidate independently per batch
+member. Defaults allow 16 local solves, a 0.15 local action step and eight
+backtracking halvings. The original failure tolerance remains 1e-4; the affine
+margin is an approximation reserve, not a relaxed nonlinear safety condition.
+If no batch member can improve its iterate, the search stops and retains the
+failure flag instead of repeatedly solving the identical local problem.
+Only the discrete backtracking/candidate choices are detached. The selected
+QP and iterate retain coefficient/state/action derivatives. These derivatives
+are piecewise derivatives of the executed numerical algorithm; changes of
+active set or search branch need not be differentiable. The finite-difference
+tests concern locally stable branches, not a global smoothness claim.
+
 ## Single-rollout policy learning
 
 Training propagates one imagined trajectory:

@@ -60,13 +60,35 @@ def lambda_return_targets(rewards, terminations, values, gamma, gae_lambda):
     return torch.stack(targets[::-1])
 
 
-def update_critic(critic, optimizer, batch, *, gamma=0.99, gae_lambda=0.95, epochs=5, minibatches=4):
+def actor_optimizer(policy, actor_lr, ball_lr):
+    if any(not math.isfinite(value) or value <= 0 for value in (actor_lr, ball_lr)):
+        raise ValueError("Actor and ball learning rates must be finite and positive")
+    groups = policy.parameter_groups()
+    return torch.optim.Adam([
+        {"params": groups["motion_encoder"].parameters(), "lr": actor_lr, "name": "motion_encoder"},
+        {"params": groups["action_decoder"].parameters(), "lr": actor_lr, "name": "action_decoder"},
+        {"params": groups["ball_encoder"].parameters(), "lr": ball_lr, "name": "ball_encoder"},
+    ], betas=(0.9, 0.95))
+
+
+def combine_critic_batches(batches):
+    return CriticBatch(*(torch.cat([getattr(batch, key) for batch in batches], 1)
+                         for key in ("features", "rewards", "terminations")))
+
+
+def update_critic(
+    critic, optimizer, batch, *, gamma=0.99, gae_lambda=0.95, epochs=5, minibatches=4,
+    distribution=None,
+):
     if not 0 <= gamma <= 1 or not 0 <= gae_lambda <= 1 or epochs < 1 or minibatches < 1:
         raise ValueError("Invalid critic update settings")
     if any(value.requires_grad for value in (batch.features, batch.rewards, batch.terminations)):
         raise ValueError("Critic training data must be detached from the actor rollout")
     with torch.no_grad():
-        critic.norm.update(batch.features)
+        features_for_norm = batch.features.flatten(0, 1)
+        if distribution is not None:
+            features_for_norm = distribution.gather_tensor(features_for_norm)
+        critic.norm.update(features_for_norm)
         values = critic(batch.features)
         targets = lambda_return_targets(batch.rewards, batch.terminations, values, gamma, gae_lambda)
     features = batch.features[:-1].flatten(0, 1)
@@ -75,11 +97,20 @@ def update_critic(critic, optimizer, batch, *, gamma=0.99, gae_lambda=0.95, epoc
     for _ in range(epochs):
         permutation = torch.randperm(len(targets), device=features.device)
         for indices in permutation.tensor_split(min(minibatches, len(targets))):
-            loss = (critic(features[indices]) - targets[indices]).square().mean()
-            if not bool(torch.isfinite(loss)):
-                raise RuntimeError("Nonfinite critic loss; update was not applied")
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            error = None
+            try:
+                loss = (critic(features[indices]) - targets[indices]).square().mean()
+                if not bool(torch.isfinite(loss)):
+                    raise RuntimeError("Nonfinite critic loss; update was not applied")
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+            except Exception as caught:
+                error = caught
+            if distribution is not None:
+                distribution.agree(error)
+                distribution.average_gradients(critic.parameters())
+            elif error is not None:
+                raise error
             clip_gradients(critic.parameters(), 1.0)
             optimizer.step()
             losses.append(float(loss.detach()))
@@ -103,7 +134,10 @@ def imagined_objective(
     zero = predicted[0].new_zeros(())
     metrics = {key: zero for key in (
         "task", "correction", "qp_slack", "qp_violation", "action_saturation", "qp_failure_rate",
-        "correction_valid_rate", "baseline_avoidance",
+        "correction_valid_rate", "baseline_avoidance", "nonzero_valid_correction_rate",
+        "qp_affine_failure_rate", "qp_nonlinear_failure_rate", "qp_relaxation_rate", "qp_iterations",
+        "qp_initial_safe_rate", "qp_initial_geometric_safe_rate",
+        "qp_search_stalled_rate",
     )}
     loss = zero
     alive = predicted[0].new_ones(lower.shape[0])
@@ -131,6 +165,27 @@ def imagined_objective(
             slack = result.qp.slack.clamp_min(0).square().mean(-1)
             metrics["correction_valid_rate"] = metrics["correction_valid_rate"] + valid.float().mean()
             metrics["qp_failure_rate"] = metrics["qp_failure_rate"] + result.failed.float().mean()
+            metrics["nonzero_valid_correction_rate"] = metrics["nonzero_valid_correction_rate"] + (
+                valid & ((executed - raw).square().sum(-1) > 1e-10)
+            ).float().mean()
+            tolerance = getattr(getattr(safety, "config", None), "tolerance", 1e-4)
+            for key, flag in (
+                ("qp_affine_failure_rate", result.qp.affine_residual.amin(-1) < -tolerance),
+                ("qp_nonlinear_failure_rate", result.nonlinear_residual.amin(-1) < -tolerance),
+                ("qp_relaxation_rate", result.qp.slack.amax(-1) > tolerance),
+            ):
+                metrics[key] = metrics[key] + flag.float().mean()
+            if result.iterations is not None:
+                metrics["qp_iterations"] = metrics["qp_iterations"] + result.iterations.float().mean()
+            if result.initial_barrier is not None:
+                metrics["qp_initial_safe_rate"] = metrics["qp_initial_safe_rate"] + (
+                    result.initial_barrier.amin(-1) >= 0
+                ).float().mean()
+                metrics["qp_initial_geometric_safe_rate"] = metrics["qp_initial_geometric_safe_rate"] + (
+                    result.clearance.amin(-1) >= 0
+                ).float().mean()
+            if result.search_stalled is not None:
+                metrics["qp_search_stalled_rate"] = metrics["qp_search_stalled_rate"] + result.search_stalled.float().mean()
             metrics["qp_violation"] = metrics["qp_violation"] + torch.relu(
                 -result.nonlinear_residual
             ).square().mean().detach()

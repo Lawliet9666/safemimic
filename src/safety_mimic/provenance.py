@@ -9,9 +9,10 @@ from pathlib import Path
 import torch
 
 
-def write_provenance(directory: Path, root: Path, checkpoints=()):
+def write_provenance(directory: Path, root: Path, checkpoints=(), *, filename="provenance.json"):
     files = sorted((root / "src/safety_mimic").glob("*.py")) + sorted((root / "scripts").glob("*.py"))
     files += [root / "scripts/container.sh", root / "Dockerfile"]
+    files += sorted(path for path in (root / "scripts/hpc").glob("*") if path.is_file())
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     for checkpoint in checkpoints:
         path = Path(checkpoint)
@@ -25,8 +26,8 @@ def write_provenance(directory: Path, root: Path, checkpoints=()):
         "torch_cuda": torch.version.cuda,
         "allowed_cpus": sorted(os.sched_getaffinity(0)),
         "torch_threads": torch.get_num_threads(),
-        "gpu": torch.cuda.get_device_name(0),
+        "gpu": torch.cuda.get_device_name(torch.cuda.current_device()),
         "visible_cuda_devices": torch.cuda.device_count(),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
-    (directory / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+    (directory / filename).write_text(json.dumps(record, indent=2) + "\n")
