@@ -1,4 +1,4 @@
-"""Evaluate the nominal neural policy on identical throws; no QP or world model."""
+"""Evaluate identical throws with nominal or explicitly filtered execution."""
 
 import argparse
 import csv
@@ -16,6 +16,9 @@ parser.add_argument("--manifest", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--checkpoint", help="Full-policy checkpoint; omit to evaluate pretrained SuperMimic")
 parser.add_argument("--pretrained", default="checkpoints/g1-lafan1-040000")
+parser.add_argument("--execution_filter", action=argparse.BooleanOptionalAction, default=None,
+                    help="Defaults to the checkpoint's deployment contract")
+parser.add_argument("--world_model", help="Frozen model for external-filter deployment")
 parser.add_argument("--label")
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--seed", type=int, default=0)
@@ -62,9 +65,10 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     trajectory_dir = args.output / "trajectories"
     trajectory_dir.mkdir()
-    controller = Controller(ROOT, checkpoint=args.checkpoint, pretrained=args.pretrained, seed=args.seed)
+    controller = Controller(ROOT, checkpoint=args.checkpoint, pretrained=args.pretrained, seed=args.seed,
+                            execution_filter=args.execution_filter, world_model=args.world_model)
     # An executable deployment contract, including accidental future imports.
-    if "qpth.qp" in sys.modules or "safety_mimic.layer" in sys.modules:
+    if controller.safety is None and ("qpth.qp" in sys.modules or "safety_mimic.layer" in sys.modules):
         raise RuntimeError("Policy-only evaluation unexpectedly imported the QP layer")
     config = {
         "format": "safetymimic.evaluation.v2",
@@ -86,10 +90,13 @@ def main():
         if controller.checkpoint
         else [resolve_artifact(ROOT, args.pretrained) / "policy.safetensors"]
     )
+    if controller.world_model_path is not None:
+        sources.append(controller.world_model_path)
     write_provenance(args.output, ROOT, sources)
     sim_cfg = make_sim("cuda:0", args)
     sim_cfg.dt, sim_cfg.physics.num_substeps = 0.005, 1
-    episodes, forward_times = [], []
+    episodes, forward_times, actor_times, filter_times = [], [], [], []
+    filter_actions = filter_failures = 0
     transitions = 0
     torch.cuda.reset_peak_memory_stats()
 
@@ -110,8 +117,18 @@ def main():
                 "physics_substeps": transitions * 4,
                 "wall_seconds": time.monotonic() - start,
                 "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
-                "actor_batch_seconds_p50": float(np.median(forward_times)) if forward_times else None,
-                "deployment": {"uses_qp": False, "uses_world_model": False},
+                "actor_batch_seconds_p50": float(np.median(actor_times)) if actor_times else None,
+                "controller_batch_seconds_p50": float(np.median(forward_times)) if forward_times else None,
+                "controller_batch_seconds_p95": float(np.quantile(forward_times, .95)) if forward_times else None,
+                "controller_batch_seconds_max": max(forward_times) if forward_times else None,
+                "control_deadline_seconds": manifest["control_dt"],
+                "controller_deadline_miss_rate": float(np.mean(np.array(forward_times) > manifest["control_dt"])) if forward_times else None,
+                "filter_batch_seconds_p50": float(np.median(filter_times)) if filter_times else None,
+                "filter_batch_seconds_p95": float(np.quantile(filter_times, .95)) if filter_times else None,
+                "filter_actions": filter_actions, "filter_failures": filter_failures,
+                "filter_failure_rate": filter_failures / filter_actions if filter_actions else None,
+                "filter_failure_execution": "finite relaxed QP action; never nominal fallback" if controller.safety else None,
+                "deployment": controller.metadata["deployment"],
             },
         )
         dump_json(args.output / "selected_clips.json", select_clips(episodes))
@@ -143,7 +160,7 @@ def main():
                 padded = batch + [batch[-1]] * (args.num_envs - len(batch))
                 env.load_throws(padded, manifest["initial"])
                 history = None
-                evidence = [EpisodeEvidence(row) for row in batch]
+                evidence = [EpisodeEvidence(row, execution_uses_qp=controller.safety is not None) for row in batch]
                 traces, rows, events = [{} for _ in batch], [[] for _ in batch], [[] for _ in batch]
 
                 batch_size = len(batch)
@@ -169,6 +186,9 @@ def main():
                         tick = time.monotonic()
                         try:
                             nominal, history = controller.nominal(env, history)
+                            torch.cuda.synchronize()
+                            actor_elapsed = time.monotonic() - tick
+                            tick_execution = time.monotonic()
                             action = controller.execute(env, nominal)
                         except (RuntimeError, ValueError) as error:
                             for item in evidence:
@@ -178,6 +198,13 @@ def main():
                         torch.cuda.synchronize()
                         elapsed = time.monotonic() - tick
                         forward_times.append(elapsed)
+                        actor_times.append(actor_elapsed)
+                        filter_elapsed = time.monotonic() - tick_execution if controller.safety else 0.0
+                        filtered = controller.last_filter_result
+                        if filtered is not None:
+                            filter_times.append(filter_elapsed)
+                            filter_actions += batch_size
+                            filter_failures += int(filtered.failed[:batch_size].sum())
                         if not bool(torch.isfinite(nominal).all() & torch.isfinite(action).all()):
                             invalid = ~torch.isfinite(nominal).all(-1) | ~torch.isfinite(action).all(-1)
                             for index, item in enumerate(evidence):
@@ -218,7 +245,11 @@ def main():
                                         | (action[index] >= upper[index] - 1e-4)
                                     ).sum()
                                 ),
-                                "actor_batch_seconds": elapsed,
+                                "actor_batch_seconds": actor_elapsed,
+                                "controller_batch_seconds": elapsed,
+                                "filter_batch_seconds": filter_elapsed,
+                                "qp_failed": bool(filtered.failed[index]) if filtered else False,
+                                "qp_max_slack": float(filtered.qp.slack[index].max()) if filtered else 0.0,
                                 "root_height_m": float(actual_state[0][index, 2]),
                                 "root_tilt_cos": float(actual_state[1][index, 2, 2]),
                             }

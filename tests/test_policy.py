@@ -67,13 +67,14 @@ def test_optimizer_updates_original_encoder_decoder_and_ball_branch():
         )
 
 
-def test_checkpoint_round_trip_is_self_contained_and_rejects_old_residual(tmp_path, monkeypatch):
+@pytest.mark.parametrize("method,uses_filter", [("safetymimic", False), ("filter", True)])
+def test_checkpoint_round_trip_is_self_contained_and_rejects_old_residual(tmp_path, monkeypatch, method, uses_filter):
     torch.manual_seed(7)
     actor = BallConditionedPolicy()
     with torch.no_grad():
         actor.ball_encoder[-1].weight.normal_(std=0.02)
     path = tmp_path / "policy.pt"
-    save_policy(path, actor, config={"method": "safetymimic"}, training={"updates": 2})
+    save_policy(path, actor, config={"method": method}, training={"updates": 2})
 
     def forbidden(*args, **kwargs):
         raise AssertionError("A complete checkpoint must not reload the pretrained tracker")
@@ -82,7 +83,7 @@ def test_checkpoint_round_trip_is_self_contained_and_rejects_old_residual(tmp_pa
     restored, metadata = load_policy(path)
     for key, value in actor.state_dict().items():
         torch.testing.assert_close(restored.state_dict()[key], value, atol=0, rtol=0)
-    assert metadata["deployment"] == {"uses_qp": False, "uses_world_model": False}
+    assert metadata["deployment"] == {"uses_qp": uses_filter, "uses_world_model": uses_filter}
     torch.save({"residual": {}}, tmp_path / "old.pt")
     with pytest.raises(ValueError, match="old residual"):
         load_policy(tmp_path / "old.pt")

@@ -126,6 +126,7 @@ class EpisodeEvidence:
     min_clearance: float | None = None
     invalid: bool = False
     policy_error: str | None = None
+    execution_uses_qp: bool = False
 
     def event(self, name, time):
         self.first_events.setdefault(name, float(time))
@@ -139,6 +140,9 @@ class EpisodeEvidence:
             self.contact_links.add(event["link"])
         if row["fall"]:
             self.event("fall", row["time_end"])
+        if row.get("qp_failed", False):
+            self.event("qp_filter_failure", row["time"])
+            self.causes.add("qp_filter_failure")
         if contact_events and row["clearance_before_m"] >= 0 and row["clearance_after_m"] >= 0:
             self.causes.add("intersample_or_geometry_mismatch")
 
@@ -168,7 +172,7 @@ class EpisodeEvidence:
             "recovered": recovered,
             "root_displacement_m": root_displacement,
             "physical_task_success": success,
-            "execution_uses_qp": False,
+            "execution_uses_qp": self.execution_uses_qp,
             "first_events": self.first_events,
             "contact_links": sorted(self.contact_links),
             "failure_categories": sorted(self.causes),

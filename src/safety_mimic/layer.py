@@ -79,6 +79,18 @@ class SafetyLayer:
             state, ball
         )
 
+    def filter(self, state, ball, nominal, context, lower, upper):
+        """Execute a black-box filter, retaining only local action Jacobians.
+
+        No actor/QP training graph escapes this call. Failed finite relaxed
+        solutions retain their failure mask; they are never labeled safe.
+        """
+        with torch.no_grad():
+            result = self(state, ball, nominal, context, lower, upper)
+        if not bool(torch.isfinite(result.qp.action).all()):
+            raise RuntimeError("Nonfinite execution-filter action; simulator was not advanced")
+        return result
+
     def __call__(self, state, ball, nominal, context, lower, upper, backward="implicit"):
         if backward not in {"implicit", "identity"}:
             raise ValueError("Backward must be implicit or identity")

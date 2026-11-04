@@ -83,6 +83,15 @@ def test_invalid_action_is_not_a_contact_free_observation():
     assert summary["physical_task_success"]["rate"] == 0
 
 
+def test_failed_execution_filter_is_reported_separately_from_physical_contact():
+    evidence = EpisodeEvidence(throw(), execution_uses_qp=True)
+    evidence.observe(row(qp_failed=True))
+    result = evidence.finish(duration=3, root_displacement=0, completed=True)
+    assert result["execution_uses_qp"]
+    assert result["physical_task_success"] and not result["contact"]
+    assert "qp_filter_failure" in result["failure_categories"]
+
+
 def test_contact_time_is_physics_time_and_conservatism_is_not_contact():
     e = EpisodeEvidence(throw())
     e.observe(

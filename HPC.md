@@ -108,6 +108,42 @@ weights, unchanged normalization, synchronized ranks and complete snapshots.
 Inspect QP failure/relaxation rates separately from physical hits and falls.
 Earlier test results do not validate a newly pulled revision.
 
+## External-filter timing comparison
+
+`METHOD=supermimic` uses the original eight-term task reward and frozen-model
+actor update without a QP. `METHOD=filter` uses that same imagined actor update,
+and filters real collection and evaluation actions without backpropagating through
+the QP. Its imagined and real executed trajectories can differ. It does not use
+an identity-gradient approximation. `METHOD=safetymimic` retains the differentiable
+imagined safety layer and nominal deployment.
+
+The external filter still computes local action Jacobians for its QP, with
+`create_graph=False`; its output has no actor training graph. Finite relaxed
+solutions are executed for simulation diagnosis and explicitly counted as filter
+failures. They are not nominal fallbacks or certified safe actions.
+
+For the bounded, matched configuration comparison:
+
+```bash
+mkdir -p outputs/logs
+sbatch --partition=gpu6000-short --account=scale-lab \
+  --output=outputs/logs/filter_compare_%j.log tests/integration/compare_filters.sbatch
+```
+
+The job runs unit tests and a small integration smoke, then two updates per mode
+on two GPUs, with horizon 32, global batch 32, 64 simulator environments per GPU
+and 48 warmup steps. It records warmup/collection time separately from imagined
+forward/backward time. Each checkpoint is evaluated on the same eight development
+throws; the filter also receives a separate batch-one latency test. This is a
+timing pilot, not a convergence or full held-out evaluation. The initial actor and
+world-model hashes must match, but replay differs when filtered actions change
+physical trajectories.
+
+Reports are saved under `outputs/analysis/filter_comparison_JOBID.{md,json}`.
+Filter checkpoints automatically enable the external filter in evaluation;
+`--execution_filter` also enables it for the pretrained actor. The checkpoint
+records that deployment requires the frozen world model and QP solver.
+
 ## Initial configuration
 
 One node, **one Slurm task**, **two torchrun workers**:

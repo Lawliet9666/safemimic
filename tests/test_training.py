@@ -145,6 +145,24 @@ def test_reward_baseline_never_calls_qp_and_unfrozen_model_is_rejected():
         imagined_objective(*args, LossConfig(method="reward"))
 
 
+def test_external_filter_and_nominal_actor_updates_preserve_supermimic_gradient():
+    args = list(setup())
+    args[2] = None
+    other = (copy.deepcopy(args[0]), *args[1:])
+    baseline, baseline_metrics, _ = imagined_objective(*args, LossConfig(method="supermimic", horizon=2))
+    filtered, filtered_metrics, _ = imagined_objective(*other, LossConfig(method="filter", horizon=2))
+    torch.testing.assert_close(baseline, filtered, atol=0, rtol=0)
+    baseline.backward()
+    filtered.backward()
+    for left, right in zip(args[0].parameters(), other[0].parameters()):
+        torch.testing.assert_close(left.grad, right.grad, atol=0, rtol=0)
+    for module in args[0].parameter_groups().values():
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in module.parameters())
+    for metrics in (baseline_metrics, filtered_metrics):
+        assert metrics["correction"] == metrics["qp_slack"] == metrics["baseline_avoidance"] == 0
+    assert all(p.grad is None for p in args[1].parameters())
+
+
 def test_original_reward_alignment_discount_and_survival_are_preserved():
     args = list(setup())
     frames = []

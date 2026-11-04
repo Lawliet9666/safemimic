@@ -23,7 +23,7 @@ class LossConfig:
     baseline_avoidance_weight: float = 10.0
 
     def __post_init__(self):
-        if (self.method not in {"safetymimic", "identity", "reward"}
+        if (self.method not in {"safetymimic", "identity", "reward", "supermimic", "filter"}
                 or self.horizon < 1 or not 0 <= self.gamma <= 1):
             raise ValueError("Invalid training method or horizon")
         if any(
@@ -125,7 +125,8 @@ def imagined_objective(
         raise ValueError("World-model parameters must be frozen during policy training")
     if critic is not None and any(parameter.requires_grad for parameter in critic.parameters()):
         raise ValueError("Critic parameters must be frozen during the actor update")
-    if config.method != "reward" and safety is None:
+    imagined_filter = config.method in {"safetymimic", "identity"}
+    if imagined_filter and safety is None:
         raise ValueError("CBF-guided training requires a differentiable safety layer")
     predicted, ball = sample["state"], sample["ball"]
     history, previous = sample["history"], sample["previous"]
@@ -152,7 +153,7 @@ def imagined_objective(
             (raw < lower) | (raw > upper)
         ).float().mean()
         correction = slack = raw.new_zeros(raw.shape[0])
-        if config.method == "reward":
+        if not imagined_filter:
             executed = raw.clamp(lower, upper)
         else:
             backward = "identity" if config.method == "identity" else "implicit"

@@ -2,7 +2,8 @@
 
 The zero-initialized ball encoder preserves the pretrained actor at startup.
 The motion encoder, ball encoder, and shared action decoder are all optimized.
-Deployment needs neither dynamics weights nor a QP solver.
+Nominal deployment needs neither dynamics weights nor a QP solver. The external
+filter baseline requires both and records that contract in its checkpoint.
 """
 
 from pathlib import Path
@@ -64,7 +65,8 @@ def save_policy(path, policy, *, config, training):
         "policy": policy.state_dict(),
         "config": config,
         "training": training,
-        "deployment": {"uses_qp": False, "uses_world_model": False},
+        "deployment": {"uses_qp": config.get("method") == "filter",
+                       "uses_world_model": config.get("method") == "filter"},
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     torch.save(record, temporary)

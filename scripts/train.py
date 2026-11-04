@@ -1,4 +1,4 @@
-"""Joint actor/ball fine-tuning through training-only QPs and a frozen model."""
+"""Compare nominal, external-filter and differentiable-layer actor fine-tuning."""
 
 import argparse
 import json
@@ -21,7 +21,7 @@ parser.add_argument("--output", type=Path)
 parser.add_argument("--resume", type=Path)
 parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
 parser.add_argument("--cpu_threads", type=int)
-parser.add_argument("--method", choices=["safetymimic", "reward", "identity"], default="safetymimic")
+parser.add_argument("--method", choices=["safetymimic", "reward", "identity", "supermimic", "filter"], default="safetymimic")
 parser.add_argument("--num_envs", type=int, default=8)
 parser.add_argument("--updates", type=int, help="Total optimizer updates, including restored updates")
 parser.add_argument("--batch_size", type=int, default=4, help="Microbatch per GPU")
@@ -57,7 +57,7 @@ import torch
 from supermimic import networks
 from supermimic.env import make_sim
 from supermimic.kinematics import G1Kinematics
-from supermimic.mdp import CRITIC_EXTRA, INV_DIM, MDP
+from supermimic.mdp import CRITIC_EXTRA, INV_DIM, MDP, normalize_xi
 from supermimic.motion import MotionLib
 from supermimic.networks import Critic, WorldModel
 from supermimic.robot import G1_JOINT_NAMES, default_joint_pos_list
@@ -177,14 +177,18 @@ def main():
         "linearization_steps", "step_trust_radius", "backtracking_steps", "velocity_time",
         "anticipation_mode", "alpha", "residual_margin", "trust_radius",
     )})
-    safety = SafetyLayer(world_model, geometry, safety_config) if args.method != "reward" else None
+    imagined_filter = args.method in {"safetymimic", "identity"}
+    execution_filter = args.method == "filter"
+    safety = SafetyLayer(world_model, geometry, safety_config) if imagined_filter or execution_filter else None
     config.update(
         imagined_rollouts=1, objective=OBJECTIVE_FORMAT, training_uses_qp=safety is not None,
-        loss=asdict(loss_config), safety=asdict(safety_config), collection_uses_qp=False,
-        deployment_uses_qp=False, terminal_critic=True, task_reward="original_supermimic_eight_terms",
-        auxiliary_losses=["qp_correction", "qp_slack"] if safety is not None else [],
+        loss=asdict(loss_config), safety=asdict(safety_config), collection_uses_qp=execution_filter,
+        deployment_uses_qp=execution_filter, imagined_uses_qp=imagined_filter,
+        qp_training_gradient=imagined_filter, terminal_critic=True, task_reward="original_supermimic_eight_terms",
+        auxiliary_losses=["qp_correction", "qp_slack"] if imagined_filter else [],
         correction_teacher="passes_affine_slack_and_nonlinear_checks",
-        critic_reward="task_minus_weighted_correction_and_slack", world_size=distribution.world_size,
+        critic_reward="task_minus_weighted_correction_and_slack" if imagined_filter else "task",
+        imagined_execution_mismatch=execution_filter, world_size=distribution.world_size,
         global_batch_size=args.batch_size * args.gradient_accumulation_steps * distribution.world_size,
         simulator_resume="reset_unfinished_episodes_and_record_censoring",
     )
@@ -228,7 +232,8 @@ def main():
             "objective": OBJECTIVE_FORMAT, "training_uses_qp": safety is not None,
             "all_actor_parameters_trainable": all(p.requires_grad for p in policy.parameters()),
             "normalization_frozen": True, "terminal_critic": True,
-            "collection_uses_qp": False, "deployment_uses_qp": False,
+            "collection_uses_qp": execution_filter, "deployment_uses_qp": execution_filter,
+            "imagined_uses_qp": imagined_filter, "qp_training_gradient": imagined_filter,
         }
 
     def primary_io(operation):
@@ -266,6 +271,9 @@ def main():
 
     def collect(env, count):
         nonlocal history, transitions, replay
+        torch.cuda.synchronize(device)
+        tick_collection = time.monotonic()
+        filter_seconds = failed_actions = filter_actions = intervention = 0.0
         with torch.no_grad():
             for _ in range(count):
                 state, ball = env.state(), env.ball_state()
@@ -277,6 +285,16 @@ def main():
                 action = (raw + noise).clamp(lower, upper)
                 if not bool(torch.isfinite(raw).all() & torch.isfinite(action).all()):
                     raise RuntimeError("Nonfinite nominal action; simulator was not advanced")
+                if execution_filter:
+                    torch.cuda.synchronize(device)
+                    tick_filter = time.monotonic()
+                    filtered = safety.filter(state, ball, action, normalize_xi(env.xi), lower, upper)
+                    torch.cuda.synchronize(device)
+                    filter_seconds += time.monotonic() - tick_filter
+                    failed_actions += float(filtered.failed.sum())
+                    filter_actions += len(action)
+                    intervention += float((filtered.qp.action - action).norm(dim=-1).sum())
+                    action = filtered.qp.action
                 replay.append({
                     "state": tuple(value.clone() for value in state),
                     "ball": BallState(*(getattr(ball, key).clone() for key in ("position", "velocity", "radius"))),
@@ -294,10 +312,24 @@ def main():
                         "hit": bool(transition["hit"][index]), "fall": bool(transition["fell"][index]),
                         "recovered": recovered, "success": not bool(
                             transition["hit"][index] or transition["fell"][index]
-                        ) and recovered, "execution_uses_qp": False, "censored": False,
+                        ) and recovered, "execution_uses_qp": execution_filter, "censored": False,
                     })
                 if len(ids):
                     env.reset_episode(ids)
+        torch.cuda.synchronize(device)
+        return {"collection_seconds": time.monotonic() - tick_collection,
+                "collection_filter_seconds": filter_seconds,
+                "collection_filter_actions": filter_actions,
+                "collection_filter_failed_actions": failed_actions,
+                "collection_filter_intervention_sum": intervention}
+
+    def collection_metrics(local):
+        result = distribution.max_metrics({k: v for k, v in local.items() if k.endswith("seconds")})
+        counters = distribution.mean_metrics({k: v for k, v in local.items() if not k.endswith("seconds")})
+        result.update({k: v * distribution.world_size for k, v in counters.items()})
+        count = result["collection_filter_actions"]
+        result["collection_filter_failure_rate"] = result["collection_filter_failed_actions"] / count if count else 0.0
+        return result
 
     sim_cfg = make_sim(device, args)
     sim_cfg.dt, sim_cfg.physics.num_substeps = 0.005, 1
@@ -323,10 +355,13 @@ def main():
             else:
                 caught = None
                 try:
-                    collect(env, args.warmup_steps)
+                    warmup = collect(env, args.warmup_steps)
                 except Exception as failure:
                     caught = failure
                 distribution.agree(caught)
+                warmup = collection_metrics(warmup)
+                primary_io(lambda: dump_json(output / "warmup.json", {**warmup, "steps": args.warmup_steps,
+                    "scope": "maximum per-rank seconds and global action counts; failed relaxed actions remain flagged"}))
                 if 0 in checkpoints:
                     save(env)
             while updates < args.updates:
@@ -336,7 +371,7 @@ def main():
                 tick_update = time.monotonic()
                 caught = None
                 try:
-                    collect(env, args.collection_steps)
+                    collection = collect(env, args.collection_steps)
                     optimizer.zero_grad(set_to_none=True)
                     rows, batches = [], []
                     forward_seconds = backward_seconds = 0.0
@@ -347,7 +382,7 @@ def main():
                         torch.cuda.synchronize(device)
                         tick = time.monotonic()
                         loss, row, batch = imagined_objective(
-                            policy, world_model, safety, mdp, motion, geometry, sample,
+                            policy, world_model, safety if imagined_filter else None, mdp, motion, geometry, sample,
                             lower.clamp_min(-5), upper.clamp_max(5), loss_config, critic=critic,
                         )
                         torch.cuda.synchronize(device)
@@ -381,11 +416,12 @@ def main():
                 updates += 1
                 imagined_transitions += sum(row.pop("imagined_transitions") for row in rows) * distribution.world_size
                 metrics = distribution.mean_metrics({key: sum(row[key] for row in rows) / len(rows) for key in rows[0]})
+                collection = collection_metrics(collection)
                 timing = distribution.max_metrics({"forward_seconds": forward_seconds, "backward_seconds": backward_seconds,
                                                    "critic_seconds": critic_seconds,
                                                    "update_seconds": time.monotonic() - tick_update,
                                                    "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(device)})
-                row = {**metadata(), **metrics, **timing, "gradient_norm": gradient_norm,
+                row = {**metadata(), **metrics, **collection, **timing, "gradient_norm": gradient_norm,
                        "parameter_group_gradient_norms": group_norms,
                        "critic_loss": distribution.mean_metrics({"loss": critic_loss})["loss"],
                        "learning_rates": {group["name"]: group["lr"] for group in optimizer.param_groups},

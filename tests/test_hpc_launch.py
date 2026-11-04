@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_hpc_shell_syntax():
-    for script in [*ROOT.glob("scripts/hpc/*.sh"), ROOT / "scripts/hpc/train_ou.sbatch"]:
+    for script in [*ROOT.glob("scripts/hpc/*.sh"), ROOT / "scripts/hpc/train_ou.sbatch",
+                   *ROOT.glob("tests/integration/*.sbatch")]:
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 

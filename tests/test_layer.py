@@ -95,6 +95,30 @@ def test_backward_ablation_preserves_forward_action():
     torch.testing.assert_close(gradient, torch.ones_like(nominal))
 
 
+def test_execution_filter_has_no_actor_graph_or_higher_order_jacobians(monkeypatch):
+    calls = []
+    original = torch.autograd.grad
+
+    def record(*args, **kwargs):
+        calls.append(kwargs.get("create_graph", False))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(torch.autograd, "grad", record)
+    layer = SafetyLayer(NonlinearDynamics(), LinearGeometry(), SafetyConfig(
+        velocity_time=0, clearance_margin=0, slack_weight=100, trust_radius=2))
+    state = torch.tensor([[0.5]], dtype=torch.double, requires_grad=True)
+    nominal = torch.tensor([[-0.7]], dtype=torch.double, requires_grad=True)
+    ball = BallState(torch.zeros(1, 3, dtype=torch.double), torch.zeros(1, 3, dtype=torch.double),
+                     torch.zeros(1, dtype=torch.double))
+    result = layer.filter(state, ball, nominal, None, nominal.new_full((1, 1), -2), nominal.new_full((1, 1), 2))
+    assert calls and not any(calls)
+    for value in (result.qp.action, result.qp.slack, result.qp.affine_residual, result.nonlinear_residual,
+                  result.clearance, result.initial_barrier):
+        assert not value.requires_grad
+    assert state.grad is nominal.grad is None
+    assert not result.failed.any()
+
+
 def test_seeded_ball_reaches_target():
     target = torch.tensor([[0.0, 0.0, 0.9], [0.0, 0.0, 0.5]])
     ball = aimed_throw(target, torch.Generator().manual_seed(17))
