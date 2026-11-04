@@ -38,7 +38,7 @@ be checked without reinstalling:
 bash scripts/hpc/setup_env.sh --check
 ```
 
-`tools/verify/check_env.py` verifies pinned versions, source revisions and imports.
+`tests/integration/check_env.py` verifies pinned versions, source revisions and imports.
 It records the seven known metadata conflicts inherited from the pinned
 IsaacLab overrides and qpth's NumPy cap, and fails on any other conflict. These
 exceptions do not prove importer or simulator compatibility: asset conversion
@@ -61,7 +61,7 @@ wrapper adds the typed request for `gpu6000` and `gpu6000-short`. `OU_GRES` can
 override it for another site. The short partition has a four-hour limit; use
 `OU_PARTITION=gpu6000` for the default 24-hour training request.
 
-`tools/verify/preflight.py` checks CUDA/NCCL gradient averaging, disjoint worker
+`tests/integration/preflight.py` checks CUDA/NCCL gradient averaging, disjoint worker
 CPU sets, and thread counts bounded by `SLURM_CPUS_PER_TASK`. It records the host task affinity
 before entering Apptainer; Slurm abstract CPU IDs are never treated as Linux
 CPU IDs. The report is `outputs/results/ou_preflight_JOBID.json`. It does not
@@ -74,17 +74,23 @@ The local Docker wrapper exposes GPU 0 only and is not used for two-GPU jobs.
 
 Run these commands on an allocated HPC node. Use one `srun` task per command;
 the numerical and simulator commands explicitly select the Slurm runtime.
-Standalone verification tools live in `tools/verify/` and run when requested.
-Environment setup also runs `check_env.py`.
+Standalone verification entrypoints live in `tests/integration/` and run when
+requested. Their filenames keep them outside default pytest discovery; simulator
+and Slurm checks require their documented runtime. Environment setup also runs
+`check_env.py`.
+
+Manual gradient diagnostics live in `tests/debug/diagnose_layer.py`. They are
+not collected by pytest. The archived replay utility is local-only and ignored;
+maintained verification tools stay tracked so the HPC receives them through Git.
 
 ```bash
 scripts/hpc/python.sh scripts/download_assets.py --prepare
-scripts/hpc/python.sh tools/verify/validate_geometry.py
-scripts/hpc/python.sh tools/verify/validate_starting_policy.py --runtime slurm
+scripts/hpc/python.sh tests/integration/validate_geometry.py
+scripts/hpc/python.sh tests/integration/validate_starting_policy.py --runtime slurm
 scripts/hpc/python.sh -m pytest -q
 scripts/hpc/python.sh scripts/fit_world_model.py --runtime slurm
-scripts/hpc/python.sh tools/verify/validate_world_model.py --runtime slurm
-scripts/hpc/python.sh tools/verify/validate_layer.py --runtime slurm --finite_difference
+scripts/hpc/python.sh tests/integration/validate_world_model.py --runtime slurm
+scripts/hpc/python.sh tests/integration/validate_layer.py --runtime slurm --finite_difference
 ```
 
 Asset preparation downloads the pinned actor, motions and robot meshes, generates

@@ -10,4 +10,5 @@ __pycache__/
 *.log
 .ruff_cache/
 outputs/
-tests/
+# Local archived diagnostic; maintained tests remain visible to Git.
+/tests/debug/validate_qp_replay.py

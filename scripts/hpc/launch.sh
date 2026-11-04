@@ -11,7 +11,7 @@ python_executable="${OU_PYTHON:-python}"
 "$python_executable" -c 'import torch; assert torch.cuda.device_count() == 2, "Expected exactly two Slurm-assigned visible GPUs"; print(torch.__version__, torch.version.cuda, [torch.cuda.get_device_name(i) for i in range(2)], flush=True)'
 if [[ "${PREFLIGHT_ONLY:-0}" == 1 ]]; then
   exec "$python_executable" -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 \
-    tools/verify/preflight.py
+    tests/integration/preflight.py
 fi
 training=(--runtime slurm --cpu_threads "${CPU_THREADS:-16}"
   --updates "${UPDATES:-3000}" --output "$RUN_DIR" --stop_file "$STOP_FILE")

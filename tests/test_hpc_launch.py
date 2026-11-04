@@ -39,8 +39,8 @@ def test_launch_requests_exactly_two_workers_and_preserves_gpu_assignment(tmp_pa
     assert command[:2] == ["-m", "torch.distributed.run"]
     assert "--nproc-per-node=2" in command
     if preflight:
-        assert "tools/verify/preflight.py" in command
-        assert (ROOT / "tools/verify/preflight.py").is_file()
+        assert "tests/integration/preflight.py" in command
+        assert (ROOT / "tests/integration/preflight.py").is_file()
         return
     assert command[command.index("--runtime") + 1] == "slurm"
     if resume:

@@ -6,7 +6,7 @@ user_root="$(cd "$project_root/../.." && pwd)"
 environment_root="${OU_ENV_ROOT:-$user_root/envs/safetymimic}"
 cd "$project_root"
 if [[ "${1:-}" == --check ]]; then
-  exec bash scripts/hpc/python.sh tools/verify/check_env.py
+  exec bash scripts/hpc/python.sh tests/integration/check_env.py
 fi
 : "${SLURM_JOB_ID:?Run setup in a CPU Slurm allocation}"
 [[ "$(uname -s)" == Linux ]] || { echo 'The simulator environment is Linux-only' >&2; exit 2; }
@@ -50,5 +50,5 @@ cd "$project_root/vendor/supermimic/IsaacLab"
 cd "$project_root"
 "${runtime[@]}" "$uv" pip install --python "$python_executable" --no-deps -e .
 ln -sfn "$project_root/scripts/hpc/python.sh" "$environment_root/bin/safetymimic-python"
-"${runtime[@]}" "$python_executable" tools/verify/check_env.py
+"${runtime[@]}" "$python_executable" tests/integration/check_env.py
 "${runtime[@]}" "$uv" pip freeze --python "$python_executable" > outputs/setup/installed_packages.txt
