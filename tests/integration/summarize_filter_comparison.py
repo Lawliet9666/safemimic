@@ -64,7 +64,8 @@ def main():
             "actor update remains unfiltered. `safetymimic` differentiates imagined QPs and deploys its nominal actor.", "",
             "| Metric | No QP | External filter | Differentiable layer |", "|---|---:|---:|---:|",
             *["| " + name + " | " + " | ".join(value) + " |" for name, value in table], "",
-            "Times are seconds unless stated. The methods encounter different states because filtered physical actions "
+            "Times are seconds unless stated. GPU allocation is the PyTorch allocator peak; it excludes allocations "
+            "made directly by Warp/Newton and the CUDA runtime. The methods encounter different states because filtered physical actions "
             "change replay; this is an end-to-end comparison rather than an isolated kernel benchmark.", "",
             "Evaluation is a deliberately partial eight-throw development smoke test, not the full held-out benchmark. "
             "Batch-eight latency is not single-robot latency. The separate batch-one filter evaluation contains only "

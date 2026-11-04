@@ -196,10 +196,11 @@ def main():
                             aborted = True
                             break
                         torch.cuda.synchronize()
-                        elapsed = time.monotonic() - tick
+                        finished = time.monotonic()
+                        elapsed = finished - tick
                         forward_times.append(elapsed)
                         actor_times.append(actor_elapsed)
-                        filter_elapsed = time.monotonic() - tick_execution if controller.safety else 0.0
+                        filter_elapsed = finished - tick_execution if controller.safety else 0.0
                         filtered = controller.last_filter_result
                         if filtered is not None:
                             filter_times.append(filter_elapsed)
