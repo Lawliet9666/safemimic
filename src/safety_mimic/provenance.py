@@ -13,6 +13,7 @@ def write_provenance(directory: Path, root: Path, checkpoints=(), *, filename="p
     files = sorted((root / "src/safety_mimic").glob("*.py")) + sorted((root / "scripts").glob("*.py"))
     files += [root / "scripts/container.sh", root / "Dockerfile"]
     files += sorted(path for path in (root / "scripts/hpc").glob("*") if path.is_file())
+    files += sorted((root / "tools/verify").glob("*.py"))
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     for checkpoint in checkpoints:
         path = Path(checkpoint)

@@ -38,7 +38,7 @@ be checked without reinstalling:
 bash scripts/hpc/setup_env.sh --check
 ```
 
-`scripts/hpc/check_env.py` verifies pinned versions, source revisions and imports.
+`tools/verify/check_env.py` verifies pinned versions, source revisions and imports.
 It records the seven known metadata conflicts inherited from the pinned
 IsaacLab overrides and qpth's NumPy cap, and fails on any other conflict. These
 exceptions do not prove importer or simulator compatibility: asset conversion
@@ -61,8 +61,8 @@ wrapper adds the typed request for `gpu6000` and `gpu6000-short`. `OU_GRES` can
 override it for another site. The short partition has a four-hour limit; use
 `OU_PARTITION=gpu6000` for the default 24-hour training request.
 
-Preflight checks CUDA/NCCL gradient averaging, disjoint worker CPU sets, and
-thread counts bounded by `SLURM_CPUS_PER_TASK`. It records the host task affinity
+`tools/verify/preflight.py` checks CUDA/NCCL gradient averaging, disjoint worker
+CPU sets, and thread counts bounded by `SLURM_CPUS_PER_TASK`. It records the host task affinity
 before entering Apptainer; Slurm abstract CPU IDs are never treated as Linux
 CPU IDs. The report is `outputs/results/ou_preflight_JOBID.json`. It does not
 exercise the simulator. `submit_ou.sh` accepts additional sbatch arguments.
@@ -74,15 +74,17 @@ The local Docker wrapper exposes GPU 0 only and is not used for two-GPU jobs.
 
 Run these commands on an allocated HPC node. Use one `srun` task per command;
 the numerical and simulator commands explicitly select the Slurm runtime.
+Standalone verification tools live in `tools/verify/` and run when requested.
+Environment setup also runs `check_env.py`.
 
 ```bash
 scripts/hpc/python.sh scripts/download_assets.py --prepare
-scripts/hpc/python.sh scripts/validate_geometry.py
-scripts/hpc/python.sh scripts/validate_starting_policy.py --runtime slurm
+scripts/hpc/python.sh tools/verify/validate_geometry.py
+scripts/hpc/python.sh tools/verify/validate_starting_policy.py --runtime slurm
 scripts/hpc/python.sh -m pytest -q
 scripts/hpc/python.sh scripts/fit_world_model.py --runtime slurm
-scripts/hpc/python.sh scripts/validate_world_model.py --runtime slurm
-scripts/hpc/python.sh scripts/validate_layer.py --runtime slurm --finite_difference
+scripts/hpc/python.sh tools/verify/validate_world_model.py --runtime slurm
+scripts/hpc/python.sh tools/verify/validate_layer.py --runtime slurm --finite_difference
 ```
 
 Asset preparation downloads the pinned actor, motions and robot meshes, generates

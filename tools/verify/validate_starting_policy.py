@@ -6,7 +6,7 @@ from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
 parser.add_argument("--cpu_threads", type=int)

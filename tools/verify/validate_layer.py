@@ -18,7 +18,7 @@ from safety_mimic.layer import SafetyConfig, SafetyLayer
 from safety_mimic.runtime import configure_runtime
 from safety_mimic.settings import SAFETY_DEFAULTS, WORLD_MODEL_PATH, add_safety_arguments
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
