@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--distances", type=float, nargs="+", default=[3, 1.5, 1, 0.6])
     parser.add_argument("--epsilons", type=float, nargs="+", default=[1e-3, 1e-4, 1e-5, 1e-6])
+    parser.add_argument("--directions", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     configure_runtime(profile=args.runtime, cpu_threads=args.cpu_threads)
@@ -93,29 +94,31 @@ def main():
         result, reference = run(nominal)
         weights = torch.randn_like(nominal)
         gradient = torch.autograd.grad((result.qp.action * weights).sum(), nominal)[0]
-        direction = torch.nn.functional.normalize(torch.randn_like(nominal), dim=-1)
-        analytic = (gradient * direction).sum(-1).detach()
+        directions = [torch.nn.functional.normalize(torch.randn_like(nominal), dim=-1)
+                      for _ in range(args.directions)]
+        derivatives = [(gradient * direction).sum(-1).detach() for direction in directions]
         report = {"args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                   "reference": reference, "gradient_norms": gradient.detach().norm(dim=-1).tolist(),
                   "initial_barrier": result.initial_barrier.amin(-1).detach().tolist(),
                   "initial_residual": result.initial_residual.amin(-1).tolist(),
                   "intervention": (result.qp.action - nominal).detach().norm(dim=-1).tolist(),
-                  "analytic": analytic.tolist(), "finite_difference": []}
+                  "analytic": [value.tolist() for value in derivatives], "finite_difference": []}
         del result, gradient
-        for epsilon in args.epsilons:
-            values, signatures = [], []
-            for sign in (-1, 1):
-                shifted, signature = run(nominal.detach() + sign * epsilon * direction)
-                values.append((shifted.qp.action * weights).sum(-1).detach())
-                signatures.append(signature)
-                del shifted
-            numerical = (values[1] - values[0]) / (2 * epsilon)
-            row = {"epsilon": epsilon, "numerical": numerical.tolist(),
-                   "normalized_error": ((analytic - numerical).abs() / (1 + numerical.abs())).tolist(),
-                   "same_signature": [signature == reference for signature in signatures],
-                   "signatures": signatures}
-            report["finite_difference"].append(row)
-            print(json.dumps({k: v for k, v in row.items() if k != "signatures"}), flush=True)
+        for index, (direction, analytic) in enumerate(zip(directions, derivatives)):
+            for epsilon in args.epsilons:
+                values, signatures = [], []
+                for sign in (-1, 1):
+                    shifted, signature = run(nominal.detach() + sign * epsilon * direction)
+                    values.append((shifted.qp.action * weights).sum(-1).detach())
+                    signatures.append(signature)
+                    del shifted
+                numerical = (values[1] - values[0]) / (2 * epsilon)
+                row = {"direction": index, "epsilon": epsilon, "numerical": numerical.tolist(),
+                       "normalized_error": ((analytic - numerical).abs() / (1 + numerical.abs())).tolist(),
+                       "same_signature": [signature == reference for signature in signatures],
+                       "signatures": signatures}
+                report["finite_difference"].append(row)
+                print(json.dumps({k: v for k, v in row.items() if k != "signatures"}), flush=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     finally:
