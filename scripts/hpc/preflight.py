@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 
 from safety_mimic.distributed import Distribution
-from safety_mimic.runtime import configure_runtime
+from safety_mimic.runtime import configure_runtime, cpu_list
 
 device = configure_runtime(profile="slurm", cpu_threads=int(os.environ.get("CPU_THREADS", "16")))
 distribution = Distribution(device)
@@ -25,9 +25,18 @@ try:
         "gpu_total_bytes": torch.cuda.get_device_properties(device).total_memory,
         "cpus": sorted(os.sched_getaffinity(0)), "torch_threads": torch.get_num_threads(),
     })
+    task_cpus = cpu_list(os.environ["SAFETYMIMIC_TASK_CPUS"])
+    rank_cpus = [set(record["cpus"]) for record in records]
+    if rank_cpus[0] & rank_cpus[1] or set.union(*rank_cpus) != task_cpus:
+        raise RuntimeError("Worker CPU affinity does not partition the recorded host Slurm task")
+    if sum(record["torch_threads"] for record in records) > int(os.environ["SLURM_CPUS_PER_TASK"]):
+        raise RuntimeError("Worker threads exceed the requested Slurm CPU count")
     if distribution.primary:
         result = {"passed": True, "scope": "NCCL/gradient/CPU allocation; simulator not exercised",
-                  "torch": str(torch.__version__), "cuda": torch.version.cuda, "ranks": records}
+                  "torch": str(torch.__version__), "cuda": torch.version.cuda, "ranks": records,
+                  "host_task_cpus": sorted(task_cpus),
+                  "allocated_cpus": int(os.environ["SLURM_CPUS_PER_TASK"]),
+                  "cpu_binding_scope": "host task affinity preserved; thread count bounded by allocation"}
         output = Path("outputs/results") / f"ou_preflight_{os.environ['SLURM_JOB_ID']}.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(result, indent=2) + "\n")

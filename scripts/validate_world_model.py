@@ -5,14 +5,17 @@ import json
 from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
+from safety_mimic.settings import SAFETY_DEFAULTS, WORLD_MODEL_PATH
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--checkpoint", default=str(ROOT / "outputs/checkpoints/world_model.pt"))
+parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
+parser.add_argument("--cpu_threads", type=int)
+parser.add_argument("--checkpoint", default=str(ROOT / WORLD_MODEL_PATH))
 parser.add_argument("--pairs", type=int, default=16)
 parser.add_argument("--samples", type=int, default=10)
 parser.add_argument("--epsilon", type=float, default=0.05)
-parser.add_argument("--velocity_time", type=float, default=0.15)
+parser.add_argument("--velocity_time", type=float, default=SAFETY_DEFAULTS["velocity_time"])
 parser.add_argument("--output", type=Path, default=ROOT / "outputs/results/world_model_validation.json")
 add_launcher_args(parser)
 args = parser.parse_args()
@@ -33,7 +36,7 @@ from safety_mimic.runtime import configure_runtime
 
 
 def main():
-    configure_runtime(args.device)
+    configure_runtime(args.device, profile=args.runtime, cpu_threads=args.cpu_threads)
     torch.manual_seed(10001)
     networks.AMP_DTYPE = None
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -121,6 +124,8 @@ def main():
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, default=str) + "\n")
         print(json.dumps(summary, indent=2))
+    if not summary["passed"]:
+        raise RuntimeError("World-model validation failed; inspect the saved prediction and sensitivity errors")
 
 
 if __name__ == "__main__":

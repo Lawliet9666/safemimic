@@ -16,18 +16,17 @@ from safety_mimic.ball import BallState
 from safety_mimic.geometry import CollisionGeometry
 from safety_mimic.layer import SafetyConfig, SafetyLayer
 from safety_mimic.runtime import configure_runtime
+from safety_mimic.settings import SAFETY_DEFAULTS, WORLD_MODEL_PATH, add_safety_arguments
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--linearization_steps", type=int, default=16)
-    parser.add_argument("--step_trust_radius", type=float, default=0.15)
-    parser.add_argument("--velocity_time", type=float, default=0.15)
-    parser.add_argument("--anticipation_mode", choices=["all", "threat"], default="all")
-    parser.add_argument("--residual_margin", type=float, default=0.0)
-    parser.add_argument("--world_model", type=Path, default=ROOT / "outputs/checkpoints/world_model.pt")
+    parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
+    parser.add_argument("--cpu_threads", type=int)
+    add_safety_arguments(parser)
+    parser.add_argument("--world_model", type=Path, default=ROOT / WORLD_MODEL_PATH)
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/results/layer_validation_current.json")
     parser.add_argument(
         "--finite_difference",
@@ -35,7 +34,7 @@ def main():
         help="Use float64 and check real-model action sensitivities along random directions",
     )
     args = parser.parse_args()
-    configure_runtime()
+    configure_runtime(profile=args.runtime, cpu_threads=args.cpu_threads)
     torch.manual_seed(17)
     device = "cuda:0"
     dtype = torch.float64 if args.finite_difference else torch.float32
@@ -57,13 +56,7 @@ def main():
     layer = SafetyLayer(
         model,
         geometry,
-        SafetyConfig(
-            linearization_steps=args.linearization_steps,
-            step_trust_radius=args.step_trust_radius,
-            velocity_time=args.velocity_time,
-            anticipation_mode=args.anticipation_mode,
-            residual_margin=args.residual_margin,
-        ),
+        SafetyConfig(**{name: getattr(args, name) for name in SAFETY_DEFAULTS}),
     )
     state = tuple(
         value.to(dtype) for value in motion.ref_state(torch.zeros(4, device=device, dtype=torch.long))
@@ -128,6 +121,7 @@ def main():
     }
     report["geometric_constraint"] = True
     report["world_model"] = str(args.world_model)
+    report["safety_settings"] = {name: getattr(args, name) for name in SAFETY_DEFAULTS}
     if args.finite_difference:
         errors, estimates = [], []
         epsilon = 1e-4

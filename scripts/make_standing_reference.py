@@ -55,8 +55,8 @@ def main():
         "selection_score": score,
         "description": "held source pose; stable tracking must be checked experimentally",
     }
-    (ROOT / "results").mkdir(exist_ok=True)
-    (ROOT / "results/standing_reference.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (ROOT / "outputs/results").mkdir(parents=True, exist_ok=True)
+    (ROOT / "outputs/results/standing_reference.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(metadata, indent=2))
 
 

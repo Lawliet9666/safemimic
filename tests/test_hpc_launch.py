@@ -89,3 +89,27 @@ def test_submission_from_another_directory_uses_project_submit_directory(tmp_pat
     assert record["cwd"] == str(ROOT)
     assert "--partition=assigned_queue" in record["args"] and "--account=assigned_account" in record["args"]
     assert record["args"][-1] == str(ROOT / "scripts/hpc/train_ou.sbatch")
+
+
+def test_matilda_request_selects_typed_gpu6000_resources(tmp_path):
+    sbatch = tmp_path / "sbatch"
+    calls = tmp_path / "submission.json"
+    sbatch.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                      "with open(os.environ['CALLS'], 'w') as f: json.dump(sys.argv[1:], f)\n")
+    sbatch.chmod(0o755)
+    environment = {**os.environ, "PATH": str(tmp_path) + ":" + os.environ["PATH"],
+                   "CALLS": str(calls), "OU_PARTITION": "gpu6000-short"}
+    environment.pop("OU_GRES", None)
+    subprocess.run(["bash", str(ROOT / "scripts/hpc/submit_ou.sh")], env=environment, check=True)
+    assert "--gres=gpu:6000:2" in json.loads(calls.read_text())
+
+
+def test_validation_and_training_share_safety_defaults():
+    import argparse
+    from safety_mimic.settings import SAFETY_DEFAULTS, add_safety_arguments
+
+    parser = argparse.ArgumentParser()
+    add_safety_arguments(parser)
+    assert vars(parser.parse_args([])) == SAFETY_DEFAULTS
+    args = parser.parse_args(["--velocity_time", "0.4", "--anticipation_mode", "all"])
+    assert args.velocity_time == 0.4 and args.anticipation_mode == "all"

@@ -35,7 +35,9 @@ else
   launcher=(bash scripts/hpc/launch.sh)
 fi
 # ONE Slurm task launches TWO torchrun workers; never multiply both counts.
-srun --ntasks=1 --cpu-bind=cores "${launcher[@]}" &
+srun --ntasks=1 --cpu-bind=cores bash -c \
+  'export SAFETYMIMIC_TASK_CPUS="$(awk "/^Cpus_allowed_list:/ {print \$2}" /proc/self/status)"; exec "$@"' \
+  bash "${launcher[@]}" &
 child=$!
 status=0
 # A trap can interrupt wait while srun is still running. Continue waiting so

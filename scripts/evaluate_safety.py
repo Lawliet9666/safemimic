@@ -10,6 +10,8 @@ from pathlib import Path
 from isaaclab.app import add_launcher_args, launch_simulation
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
+parser.add_argument("--cpu_threads", type=int)
 parser.add_argument("--manifest", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--checkpoint", help="Full-policy checkpoint; omit to evaluate pretrained SuperMimic")
@@ -46,7 +48,7 @@ def numpy(value):
 
 
 def main():
-    configure_runtime(args.device)
+    configure_runtime(args.device, profile=args.runtime, cpu_threads=args.cpu_threads)
     if args.num_envs < 1 or args.limit < 0:
         raise ValueError("Invalid environment count or throw limit")
     start = time.monotonic()

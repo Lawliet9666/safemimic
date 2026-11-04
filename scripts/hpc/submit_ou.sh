@@ -5,6 +5,11 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$project_root/outputs/logs"
 options=(--partition="$OU_PARTITION" --chdir="$project_root"
   --output="$project_root/outputs/logs/%x_%j.log")
+if [[ "$OU_PARTITION" == gpu6000 || "$OU_PARTITION" == gpu6000-short ]]; then
+  options+=(--gres="${OU_GRES:-gpu:6000:2}")
+elif [[ -n "${OU_GRES:-}" ]]; then
+  options+=(--gres="$OU_GRES")
+fi
 [[ -z "${OU_ACCOUNT:-}" ]] || options+=(--account="$OU_ACCOUNT")
 [[ -z "${OU_CONSTRAINT:-}" ]] || options+=(--constraint="$OU_CONSTRAINT")
 cd "$project_root"

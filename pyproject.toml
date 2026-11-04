@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "safetymimic"
 version = "0.1.0"
 description = "Whole-body safety layers for policy learning through learned dynamics"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = ["torch>=2.5", "numpy", "mujoco>=3.3", "qpth==0.0.18", "scipy", "safetensors"]
 
 [project.optional-dependencies]

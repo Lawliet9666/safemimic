@@ -6,6 +6,19 @@ import os
 import torch
 
 
+def cpu_list(value):
+    cpus = set()
+    for item in value.split(","):
+        bounds = item.split("-")
+        if len(bounds) == 1:
+            cpus.add(int(bounds[0]))
+        elif len(bounds) == 2 and int(bounds[0]) <= int(bounds[1]):
+            cpus.update(range(int(bounds[0]), int(bounds[1]) + 1))
+        else:
+            raise ValueError("Invalid task CPU list")
+    return cpus
+
+
 def configure_runtime(device="cuda:0", *, profile="local", cpu_threads=None):
     allowed = sorted(os.sched_getaffinity(0))
     if profile == "local":
@@ -18,13 +31,21 @@ def configure_runtime(device="cuda:0", *, profile="local", cpu_threads=None):
             raise ValueError("The Slurm runtime requires a SLURM_JOB_ID allocation")
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         local_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+        if os.environ.get("SAFETYMIMIC_TASK_CPUS"):
+            task_cpus = cpu_list(os.environ["SAFETYMIMIC_TASK_CPUS"])
+            if not task_cpus <= set(allowed):
+                raise RuntimeError("The recorded host task CPUs are not available inside the runtime")
+            allowed = sorted(task_cpus)
         if not 0 <= local_rank < local_size or len(allowed) < local_size:
             raise ValueError("Invalid rank/CPU allocation")
         # A single srun task launches torchrun workers. Partition its assigned
         # CPU set; never assume Slurm assigned physical CPUs starting at zero.
         width = len(allowed) // local_size
         cpus = set(allowed[local_rank * width:(local_rank + 1) * width])
-        threads = min(cpu_threads or width, len(cpus))
+        allocated = int(os.environ.get("SLURM_CPUS_PER_TASK", len(allowed)))
+        if allocated < local_size:
+            raise ValueError("Need at least one allocated CPU per worker")
+        threads = min(cpu_threads or width, len(cpus), allocated // local_size)
         device = f"cuda:{local_rank}"
     else:
         raise ValueError("Runtime profile must be local or slurm")

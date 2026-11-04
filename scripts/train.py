@@ -11,11 +11,12 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
+from safety_mimic.settings import WORLD_MODEL_PATH, add_safety_arguments
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--pretrained", default="checkpoints/g1-lafan1-040000")
-parser.add_argument("--world_model", default="outputs/checkpoints/world_model_broad.pt")
+parser.add_argument("--world_model", default=WORLD_MODEL_PATH)
 parser.add_argument("--output", type=Path)
 parser.add_argument("--resume", type=Path)
 parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
@@ -44,14 +45,7 @@ parser.add_argument("--collection_steps", type=int, default=1)
 parser.add_argument("--checkpoint_updates", default="0,100,300,1000,3000")
 parser.add_argument("--checkpoint_every", type=int, default=100)
 parser.add_argument("--stop_file", type=Path)
-parser.add_argument("--linearization_steps", type=int, default=16)
-parser.add_argument("--step_trust_radius", type=float, default=0.15)
-parser.add_argument("--backtracking_steps", type=int, default=8)
-parser.add_argument("--velocity_time", type=float, default=0.25)
-parser.add_argument("--anticipation_mode", choices=["all", "threat"], default="threat")
-parser.add_argument("--alpha", type=float, default=0.2)
-parser.add_argument("--residual_margin", type=float, default=0.002)
-parser.add_argument("--trust_radius", type=float, default=1.0)
+add_safety_arguments(parser)
 parser.add_argument("--correction_weight", type=float, default=1)
 parser.add_argument("--slack_weight", type=float, default=10, help="Auxiliary loss weight; QP penalty stays 1e4")
 parser.add_argument("--baseline_avoidance_weight", type=float, default=10)

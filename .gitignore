@@ -10,3 +10,4 @@ __pycache__/
 *.log
 .ruff_cache/
 outputs/
+tests/

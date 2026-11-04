@@ -1,0 +1,18 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl ffmpeg git libegl1 libgl1 libglib2.0-0 libgomp1 libnuma1 libopengl0 libvulkan1 libx11-6 libxext6 libxrender1
+    mkdir -p /usr/share/glvnd/egl_vendor.d
+    printf '%s' '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+%environment
+    export MUJOCO_GL=egl
+    export NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+
+%test
+    ldd --version
+    gcc --version

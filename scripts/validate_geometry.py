@@ -86,8 +86,8 @@ def main():
         "all_mesh_vertices_enclosed": True,
         "scope": "geometric validation, not a collision-avoidance guarantee",
     }
-    destination = ROOT / "results"
-    destination.mkdir(exist_ok=True)
+    destination = ROOT / "outputs/results"
+    destination.mkdir(parents=True, exist_ok=True)
     (destination / "geometry_validation.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 

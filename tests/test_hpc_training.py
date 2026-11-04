@@ -152,6 +152,8 @@ def test_two_process_sync_accumulation_critic_and_checkpoint(tmp_path):
 
 
 def test_runtime_preserves_local_limits_and_partitions_slurm_cpus(monkeypatch):
+    monkeypatch.delenv("SAFETYMIMIC_TASK_CPUS", raising=False)
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "32")
     assignments = []
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(20, 52)))
     monkeypatch.setattr(os, "sched_setaffinity", lambda pid, cpus: assignments.append(cpus))
@@ -173,3 +175,22 @@ def test_runtime_preserves_local_limits_and_partitions_slurm_cpus(monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(32)))
     assert configure_runtime(cpu_threads=32) == "cuda:0"
     assert assignments[-1] == set(range(6))
+
+
+def test_runtime_preserves_host_task_binding_and_thread_budget(monkeypatch):
+    assignments = []
+    threads = []
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(128)))
+    monkeypatch.setattr(os, "sched_setaffinity", lambda pid, cpus: assignments.append(cpus))
+    monkeypatch.setattr(torch, "set_num_threads", threads.append)
+    monkeypatch.setattr(torch, "set_num_interop_threads", lambda n: None)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
+    monkeypatch.setenv("SLURM_JOB_ID", "test")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
+    monkeypatch.setenv("SAFETYMIMIC_TASK_CPUS", "20-23,30-33")
+    for rank in range(2):
+        monkeypatch.setenv("LOCAL_RANK", str(rank))
+        configure_runtime(profile="slurm", cpu_threads=16)
+    assert assignments == [set(range(20, 24)), set(range(30, 34))]
+    assert threads == [4, 4]

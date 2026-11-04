@@ -6,6 +6,8 @@ from pathlib import Path
 from isaaclab.app import add_launcher_args, launch_simulation
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
+parser.add_argument("--cpu_threads", type=int)
 parser.add_argument("--output", type=Path, default=Path("outputs/manifests"))
 add_launcher_args(parser)
 args = parser.parse_args()
@@ -22,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    configure_runtime(args.device)
+    configure_runtime(args.device, profile=args.runtime, cpu_threads=args.cpu_threads)
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("Choose a fresh manifest directory; frozen throws are never overwritten")
     controller = Controller(ROOT)

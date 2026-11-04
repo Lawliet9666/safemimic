@@ -9,19 +9,22 @@ import time
 from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
+from safety_mimic.settings import WORLD_MODEL_PATH
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--runtime", choices=["local", "slurm"], default="local")
+parser.add_argument("--cpu_threads", type=int)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--iterations", type=int, default=1000)
 parser.add_argument("--batch_size", type=int, default=512)
-parser.add_argument("--window", type=int, default=4)
+parser.add_argument("--window", type=int, default=8)
 parser.add_argument("--hidden", nargs="+", type=int, default=[2048, 2048, 2048])
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--action_noise", type=float, default=0.15)
 parser.add_argument("--resume", default=None)
-parser.add_argument("--motion_dir", default=str(ROOT / "data/standing"))
-parser.add_argument("--output", default=str(ROOT / "outputs/checkpoints/world_model.pt"))
+parser.add_argument("--motion_dir", default=str(ROOT / "vendor/supermimic/data/lafan1_g1"))
+parser.add_argument("--output", default=str(ROOT / WORLD_MODEL_PATH))
 add_launcher_args(parser)
 args = parser.parse_args()
 
@@ -40,7 +43,10 @@ from safety_mimic.runtime import configure_runtime
 
 
 def main():
-    configure_runtime(args.device)
+    output = Path(args.output)
+    if output.exists():
+        raise FileExistsError("Choose a fresh world-model output; existing models are never overwritten")
+    configure_runtime(args.device, profile=args.runtime, cpu_threads=args.cpu_threads)
     torch.manual_seed(args.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
     networks.AMP_DTYPE = None
@@ -119,7 +125,6 @@ def main():
                 logs.append(row)
                 print(json.dumps(row), flush=True)
         torch.cuda.synchronize()
-        output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
             {

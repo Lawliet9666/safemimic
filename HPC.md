@@ -1,4 +1,4 @@
-# OU HPC training
+# Matilda HPC training
 
 The local wrapper remains restricted to GPU 0, CPUs 0–5 and a six-core quota.
 The Slurm profile is a separate, explicit execution mode and requires an actual
@@ -8,44 +8,97 @@ IDs or override `CUDA_VISIBLE_DEVICES`.
 
 ## Environment and submission
 
-Copy the repository, pinned vendor/assets, pretrained actor and frozen world
-model onto the shared filesystem. The ignored assets are not included by Git.
-Prefer an Apptainer SIF containing the existing tested Docker environment
-(`safetymimic:46d6cc3-cu12`, PyTorch 2.11/CUDA 12.8, qpth and the pinned
-Isaac Lab/Newton/MuJoCo-Warp stack). `SAFETYMIMIC_SIF` must point to a SIF that
-has already been built and checked. This script does not require a Docker daemon
-on compute nodes. Alternatively activate a compatible micromamba environment
-before submission and set `OU_PYTHON` to its absolute Python executable; no
-project `.venv` is created. Installing only pyproject dependencies is insufficient
-to recreate the simulation stack.
+Edit and commit code on the Mac. All simulator work, model fitting and training
+run on the HPC. Push the reviewed revision, then use `git pull --ff-only` on the
+HPC and verify the commit before running checks. Assets and environments are
+ignored by Git and remain on the shared filesystem.
+
+The pinned IsaacLab requires Python 3.12 and glibc >=2.35. Matilda's RHEL 8 host
+has glibc 2.28, so a project Conda environment runs inside a small Ubuntu 24.04
+Apptainer image. `scripts/hpc/python.sh` binds both the repository and environment;
+use it for simulator commands. `conda activate` alone does not supply newer system
+libraries. The environment defaults to `../../envs/safetymimic` relative to the
+repository, or `OU_ENV_ROOT` when set.
+
+For a fresh installation, load `miniconda3/current` and `git-gcc/2.31.1`, obtain a
+CPU Slurm allocation (4 CPUs, 16 GB, two hours), and set `TMPDIR` to a writable
+scratch directory. Then run:
 
 ```bash
-cd /path/on/ou/safetymimic
-export SAFETYMIMIC_SIF=/path/on/ou/safetymimic.sif
-export OU_PARTITION=ACTUAL_BLACKWELL_PARTITION
-# Optional, if required by your allocation:
-# export OU_ACCOUNT=your_account
-# export OU_CONSTRAINT=actual_site_constraint
-bash scripts/hpc/submit_ou.sh
+mkdir -p "$TMPDIR"
+srun --ntasks=1 bash scripts/hpc/setup_env.sh
 ```
 
-Before the first training job, submit `PREFLIGHT_ONLY=1 bash scripts/hpc/submit_ou.sh
---time=00:15:00`. It checks actual CUDA/NCCL gradient averaging and each rank's
-CPU assignment, and writes `outputs/results/ou_preflight_JOBID.json`. It does
-not test the simulator. Then use `UPDATES=10` for a bounded simulation profile.
+The tracked setup script fetches `source_pins.json`, creates the Conda Python,
+builds `scripts/hpc/ubuntu24.def`, installs the upstream packages and applies the
+tested CUDA-12 and numerical-library adjustments. An existing environment can
+be checked without reinstalling:
 
-The actual Blackwell queue and node CPU count need confirmation from OU/OSCER.
-No Blackwell partition name is invented or hardcoded. OU's public
-[partition page](https://www.ou.edu/oscer/using-the-cluster/partitions) and
-[submission guide](https://www.ou.edu/oscer/using-the-cluster/submitting-jobs)
-describe the existing queues and Slurm submission. The new node may have
-additional site requirements. The scripts request generic `--gres=gpu:2`, so
-the chosen queue/constraint must actually select the intended hardware.
+```bash
+bash scripts/hpc/setup_env.sh --check
+```
 
-`submit_ou.sh` accepts extra sbatch arguments, for example `--time=08:00:00`.
-Run the shell syntax tests (`pytest tests/test_hpc_launch.py`) before submitting.
-Do not invoke the local Docker wrapper inside this job: it deliberately exposes
-only one GPU. Apptainer uses `--nv` and preserves the scheduler's GPU assignment.
+`scripts/hpc/check_env.py` verifies pinned versions, source revisions and imports.
+It records the seven known metadata conflicts inherited from the pinned
+IsaacLab overrides and qpth's NumPy cap, and fails on any other conflict. These
+exceptions do not prove importer or simulator compatibility: asset conversion
+and simulator execution are separate required checks. NumPy is fixed at 2.3.5;
+the upstream 2.5 pin fails Numba's runtime import and Boost's declared range.
+
+For the verified Conda/Ubuntu route:
+
+```bash
+export OU_PYTHON="$PWD/scripts/hpc/python.sh"
+export OU_PARTITION=gpu6000-short
+export OU_ACCOUNT=scale-lab
+unset SAFETYMIMIC_SIF
+PREFLIGHT_ONLY=1 bash scripts/hpc/submit_ou.sh --time=00:15:00
+```
+
+Matilda requires the typed GPU request `--gres=gpu:6000:2`; an untyped request
+was routed to V100 GPUs, unsupported by this PyTorch build. The submission
+wrapper adds the typed request for `gpu6000` and `gpu6000-short`. `OU_GRES` can
+override it for another site. The short partition has a four-hour limit; use
+`OU_PARTITION=gpu6000` for the default 24-hour training request.
+
+Preflight checks CUDA/NCCL gradient averaging, disjoint worker CPU sets, and
+thread counts bounded by `SLURM_CPUS_PER_TASK`. It records the host task affinity
+before entering Apptainer; Slurm abstract CPU IDs are never treated as Linux
+CPU IDs. The report is `outputs/results/ou_preflight_JOBID.json`. It does not
+exercise the simulator. `submit_ou.sh` accepts additional sbatch arguments.
+
+An already-built full simulator SIF remains supported via `SAFETYMIMIC_SIF`.
+The local Docker wrapper exposes GPU 0 only and is not used for two-GPU jobs.
+
+## Assets and verification gates
+
+Run these commands on an allocated HPC node. Use one `srun` task per command;
+the numerical and simulator commands explicitly select the Slurm runtime.
+
+```bash
+scripts/hpc/python.sh scripts/download_assets.py --prepare
+scripts/hpc/python.sh scripts/validate_geometry.py
+scripts/hpc/python.sh scripts/validate_starting_policy.py --runtime slurm
+scripts/hpc/python.sh -m pytest -q
+scripts/hpc/python.sh scripts/fit_world_model.py --runtime slurm
+scripts/hpc/python.sh scripts/validate_world_model.py --runtime slurm
+scripts/hpc/python.sh scripts/validate_layer.py --runtime slurm --finite_difference
+```
+
+Asset preparation downloads the pinned actor, motions and robot meshes, generates
+MJCF/USD and ground assets, and writes the standing reference plus SHA-256 records.
+The starting-policy check compares real pretrained actions with zero ball
+conditioning and tests ball-free standing. World-model fitting uses the full
+motion set and eight-step fitting windows; actor fine-tuning keeps its weights
+fixed. Training and layer validation share their checkpoint and safety defaults.
+A failed validation saves evidence and returns a failing exit code.
+
+Before a long run, complete two optimizer updates in a fresh directory, resume
+to a third update, test graceful stopping, and profile ten updates at the intended
+horizon/batch. Check finite gradients, all actor groups changing, frozen model
+weights, unchanged normalization, synchronized ranks and complete snapshots.
+Inspect QP failure/relaxation rates separately from physical hits and falls.
+Earlier test results do not validate a newly pulled revision.
 
 ## Initial configuration
 
