@@ -111,9 +111,10 @@ Earlier test results do not validate a newly pulled revision.
 ## External-filter timing comparison
 
 `METHOD=supermimic` uses the original eight-term task reward and frozen-model
-actor update without a QP. `METHOD=filter` uses that same imagined actor update,
-and filters real collection and evaluation actions without backpropagating through
-the QP. Its imagined and real executed trajectories can differ. It does not use
+actor update without a QP. `METHOD=filter` adds an explicit ball-clearance penalty
+to that reward, and filters real collection and evaluation actions without
+backpropagating through the QP. Gradients still pass through the frozen world
+model and body geometry. Its imagined and real executed trajectories can differ. It does not use
 an identity-gradient approximation. `METHOD=safetymimic` retains the differentiable
 imagined safety layer and nominal deployment.
 
@@ -143,6 +144,34 @@ Reports are saved under `outputs/analysis/filter_comparison_JOBID.{md,json}`.
 Filter checkpoints automatically enable the external filter in evaluation;
 `--execution_filter` also enables it for the pretrained actor. The checkpoint
 records that deployment requires the frozen world model and QP solver.
+
+## Avoidance fine-tuning pilot
+
+The filter actor and critic use the original tracking reward minus
+`CONTROL_DT * AVOIDANCE_WEIGHT * max_body(relu(0.05 - clearance)**2)`.
+Clearance includes the geometry's existing protective margin. The default
+`AVOIDANCE_WEIGHT=10` is a starting value, not a tuned result. The QP runs only
+in real collection and evaluation. Old tracking-only filter snapshots are
+rejected on resume because their objective version differs. The timing report
+for job 406059 used the old tracking-only objective.
+
+```bash
+sbatch --partition=gpu6000-short --account=scale-lab \
+  --output=outputs/logs/avoidance_pilot_%j.log tests/integration/filter_avoidance_pilot.sbatch
+```
+
+This runs the unit suite, 100 fresh updates, and paired evaluations of the initial
+and final actors on the same first eight development throws. Both evaluations
+use the execution filter. It also evaluates unfiltered ball-free standing for
+300 steps in eight environments. The report is saved to
+`outputs/analysis/filter_avoidance_pilot_JOBID.{md,json}`.
+
+Continuation requires fewer contacts, more successful dodges, no additional
+falls or filter failures, and preserved standing (normalized return tolerance
+0.0001 absolute). Training must be finite, update every actor group and the
+critic, and preserve frozen model weights and normalizers. The script records
+the decision; it never submits 3,000 updates itself. Eight development throws
+are a pilot gate, not a general safety evaluation.
 
 ## Initial configuration
 

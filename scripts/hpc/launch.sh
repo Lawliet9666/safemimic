@@ -21,6 +21,7 @@ else
   training+=(--num_envs "${NUM_ENVS:-64}" --batch_size "${BATCH_SIZE:-8}"
     --gradient_accumulation_steps "${ACCUMULATION_STEPS:-2}" --horizon "${HORIZON:-32}"
     --actor_lr "${ACTOR_LR:-1e-5}" --ball_lr "${BALL_LR:-5e-5}" --critic_lr "${CRITIC_LR:-1e-4}"
+    --baseline_avoidance_weight "${AVOIDANCE_WEIGHT:-10}"
     --warmup_steps "${WARMUP_STEPS:-256}" --replay_steps "${REPLAY_STEPS:-1000}"
     --seed "${SEED:-0}" --method "${METHOD:-safetymimic}")
 fi

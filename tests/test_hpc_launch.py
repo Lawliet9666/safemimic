@@ -27,6 +27,7 @@ def test_launch_requests_exactly_two_workers_and_preserves_gpu_assignment(tmp_pa
     environment = {**os.environ, "OU_PYTHON": str(executable), "CALLS": str(calls),
                    "SLURM_JOB_ID": "test", "CUDA_VISIBLE_DEVICES": "GPU-assigned-A,GPU-assigned-B",
                    "RUN_DIR": str(tmp_path / "run"), "STOP_FILE": str(tmp_path / "stop"),
+                   "AVOIDANCE_WEIGHT": "12.5",
                    "PREFLIGHT_ONLY": "1" if preflight else "0"}
     if resume:
         environment["RESUME"] = "outputs/runs/old/checkpoints/latest.json"
@@ -49,6 +50,7 @@ def test_launch_requests_exactly_two_workers_and_preserves_gpu_assignment(tmp_pa
     else:
         assert command[command.index("--gradient_accumulation_steps") + 1] == "2"
         assert command[command.index("--ball_lr") + 1] == "5e-5"
+        assert command[command.index("--baseline_avoidance_weight") + 1] == "12.5"
 
 
 def test_submission_requires_a_real_partition_name(tmp_path):

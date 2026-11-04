@@ -13,7 +13,7 @@ from safety_mimic.policy import BallConditionedPolicy
 from safety_mimic.qp import QPResult
 from safety_mimic.layer import SafetyResult
 from safety_mimic.training import (
-    LossConfig, clip_gradients, imagined_objective, lambda_return_targets, update_critic,
+    LossConfig, clip_gradients, imagined_objective, lambda_return_targets, objective_format, update_critic,
 )
 
 
@@ -150,7 +150,8 @@ def test_external_filter_and_nominal_actor_updates_preserve_supermimic_gradient(
     args[2] = None
     other = (copy.deepcopy(args[0]), *args[1:])
     baseline, baseline_metrics, _ = imagined_objective(*args, LossConfig(method="supermimic", horizon=2))
-    filtered, filtered_metrics, _ = imagined_objective(*other, LossConfig(method="filter", horizon=2))
+    filtered, filtered_metrics, _ = imagined_objective(*other, LossConfig(method="filter", horizon=2,
+                                                                       baseline_avoidance_weight=0))
     torch.testing.assert_close(baseline, filtered, atol=0, rtol=0)
     baseline.backward()
     filtered.backward()
@@ -161,6 +162,31 @@ def test_external_filter_and_nominal_actor_updates_preserve_supermimic_gradient(
     for metrics in (baseline_metrics, filtered_metrics):
         assert metrics["correction"] == metrics["qp_slack"] == metrics["baseline_avoidance"] == 0
     assert all(p.grad is None for p in args[1].parameters())
+
+
+def test_filter_avoidance_alone_trains_actor_through_frozen_model_without_qp():
+    args = list(setup())
+    args[2] = None
+
+    class NoTaskGradient(MDP):
+        def reward(self, state, frame, action, previous):
+            return state[0].new_zeros(len(frame))
+
+    args[3] = NoTaskGradient()
+    frozen_before = args[1].gain.detach().clone()
+    loss, metrics, batch = imagined_objective(*args, LossConfig(method="filter", horizon=2))
+    assert loss > 0 and metrics["baseline_avoidance"] > 0
+    assert metrics["correction"] == metrics["qp_slack"] == metrics["qp_failure_rate"] == 0
+    loss.backward()
+    for module in args[0].parameter_groups().values():
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in module.parameters())
+    assert args[1].gain.grad is None
+    torch.testing.assert_close(args[1].gain, frozen_before, atol=0, rtol=0)
+
+
+def test_filter_objective_version_rejects_the_previous_tracking_only_semantics():
+    assert objective_format("filter") != objective_format("supermimic")
+    assert objective_format("safetymimic") == objective_format("identity")
 
 
 def test_original_reward_alignment_discount_and_survival_are_preserved():

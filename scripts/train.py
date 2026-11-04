@@ -74,8 +74,8 @@ from safety_mimic.policy import BallConditionedPolicy, save_policy, update_histo
 from safety_mimic.provenance import write_provenance
 from safety_mimic.runtime import configure_runtime, state_digest
 from safety_mimic.training import (
-    OBJECTIVE_FORMAT, LossConfig, actor_optimizer, clip_gradients, combine_critic_batches,
-    imagined_objective, parameter_gradient_norm, sample_replay, update_critic,
+    LossConfig, actor_optimizer, clip_gradients, combine_critic_batches,
+    imagined_objective, objective_format, parameter_gradient_norm, sample_replay, update_critic,
 )
 
 
@@ -86,7 +86,7 @@ def main():
             resolve_artifact(ROOT, args.resume), rank=int(os.environ.get("RANK", 0)),
             world_size=int(os.environ.get("WORLD_SIZE", 1)),
         )
-        if restored["config"]["objective"] != OBJECTIVE_FORMAT:
+        if restored["config"]["objective"] != objective_format(restored["config"]["method"]):
             raise ValueError("Checkpoint training objective differs from the current trainer")
         latest = manifest.parents[2] / "checkpoints/latest.json"
         if latest.exists() and (latest.parent / json.loads(latest.read_text())["checkpoint"]).resolve() != manifest:
@@ -181,13 +181,16 @@ def main():
     execution_filter = args.method == "filter"
     safety = SafetyLayer(world_model, geometry, safety_config) if imagined_filter or execution_filter else None
     config.update(
-        imagined_rollouts=1, objective=OBJECTIVE_FORMAT, training_uses_qp=safety is not None,
+        imagined_rollouts=1, objective=objective_format(args.method), training_uses_qp=safety is not None,
         loss=asdict(loss_config), safety=asdict(safety_config), collection_uses_qp=execution_filter,
         deployment_uses_qp=execution_filter, imagined_uses_qp=imagined_filter,
-        qp_training_gradient=imagined_filter, terminal_critic=True, task_reward="original_supermimic_eight_terms",
+        qp_training_gradient=imagined_filter, terminal_critic=True,
+        task_reward="original_supermimic_eight_terms_plus_ball_avoidance" if args.method in {"reward", "filter"}
+                    else "original_supermimic_eight_terms",
         auxiliary_losses=["qp_correction", "qp_slack"] if imagined_filter else [],
         correction_teacher="passes_affine_slack_and_nonlinear_checks",
-        critic_reward="task_minus_weighted_correction_and_slack" if imagined_filter else "task",
+        critic_reward="task_minus_weighted_correction_and_slack" if imagined_filter else
+                      "task_minus_ball_avoidance" if args.method in {"reward", "filter"} else "task",
         imagined_execution_mismatch=execution_filter, world_size=distribution.world_size,
         global_batch_size=args.batch_size * args.gradient_accumulation_steps * distribution.world_size,
         simulator_resume="reset_unfinished_episodes_and_record_censoring",
@@ -229,7 +232,7 @@ def main():
             "world_size": distribution.world_size, "global_batch_size": config["global_batch_size"],
             "world_model_frozen": True, "world_model_sha256_initial": initial_model_hash,
             "initial_parameter_group_sha256": initial_groups, "imagined_rollouts": 1,
-            "objective": OBJECTIVE_FORMAT, "training_uses_qp": safety is not None,
+            "objective": objective_format(args.method), "training_uses_qp": safety is not None,
             "all_actor_parameters_trainable": all(p.requires_grad for p in policy.parameters()),
             "normalization_frozen": True, "terminal_critic": True,
             "collection_uses_qp": execution_filter, "deployment_uses_qp": execution_filter,

@@ -13,6 +13,11 @@ from .policy import ball_features
 OBJECTIVE_FORMAT = "safetymimic.supermimic_correction_slack.v1"
 
 
+def objective_format(method):
+    # Old filter snapshots optimized tracking alone and cannot resume this loss.
+    return "safetymimic.filter_ball_avoidance.v1" if method == "filter" else OBJECTIVE_FORMAT
+
+
 @dataclass
 class LossConfig:
     method: str = "safetymimic"
@@ -194,10 +199,11 @@ def imagined_objective(
             raise RuntimeError("Nonfinite QP action/slack; imagined model was not advanced")
         following = world_model.step(predicted, executed, context)
         # Reuse all eight original reward terms, aligned to the next reference
-        # frame. No handcrafted posture/balance or extra barrier loss is added.
+        # frame, before the method-specific auxiliary costs below.
         task_reward = mdp.reward(following, next_frame, executed, previous)
-        if config.method == "reward":
-            # This separately labeled baseline needs a ball-avoidance signal.
+        if config.method in {"reward", "filter"}:
+            # The external filter does not participate in this actor graph.
+            # Learn avoidance directly through frozen dynamics and geometry.
             clearance, _ = geometry.barriers(following, next_ball)
             avoidance = torch.relu(0.05 - clearance).square().amax(-1)
             task_reward = task_reward - CONTROL_DT * config.baseline_avoidance_weight * avoidance
