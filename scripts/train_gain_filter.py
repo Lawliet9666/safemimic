@@ -84,7 +84,7 @@ def main():
                   evaluation_throw_ids=[t["throw_id"] for t in manifest["throws"][:8]],
                   reward={"tracking": "original eight-term reward", "first_contact": -10,
                           "first_fall": -20, "failed_filter_action": -0.02, "successful_episode": 5},
-                  sampling="four complete rollout batches, with fresh on-policy data between PPO batches",
+                  sampling=f"{args.rounds} complete rollout batches, with fresh on-policy data between PPO batches",
                   advantage="Monte Carlo return-to-go minus leave-one-out environment mean at each time")
     output.mkdir(parents=True)
     dump_json(output / "config.json", config)

@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/results/layer_validation_current.json")
     parser.add_argument("--adaptive_gain", action="store_true")
     parser.add_argument("--gain_finite_difference", action="store_true", help="Check the new coefficient derivative only")
+    parser.add_argument("--ball_distances", type=float, nargs=4, default=[3., 1.5, 1., .6])
+    parser.add_argument("--ball_speed", type=float, default=5.)
     parser.add_argument(
         "--finite_difference",
         action="store_true",
@@ -71,11 +73,11 @@ def main():
         for i, geom in enumerate(geometry.geom_ids)
         if geometry.model.body(int(geometry.model.geom_bodyid[geom])).name == "torso_link"
     )
-    ball_position = centers[:, torso] + torch.tensor([3.0, 1.5, 1.0, 0.6], device=device)[:, None] * (
+    ball_position = centers[:, torso] + torch.tensor(args.ball_distances, device=device)[:, None] * (
         state[0].new_tensor([1, 0, 0])
     )
     ball = BallState(
-        ball_position, state[0].new_tensor([-5, 0, 0]).expand(4, -1), state[0].new_full((4,), 0.08)
+        ball_position, state[0].new_tensor([-args.ball_speed, 0, 0]).expand(4, -1), state[0].new_full((4,), 0.08)
     )
     # Use the exact upstream actuator mapping.
     from supermimic.robot import action_scale
@@ -127,6 +129,8 @@ def main():
         "failure_meaning": "no unrelaxed feasible action found; not proof of infeasibility",
     }
     report["geometric_constraint"] = True
+    report["ball_distances"] = args.ball_distances
+    report["ball_speed"] = args.ball_speed
     report["world_model"] = str(args.world_model)
     report["safety_settings"] = {name: getattr(args, name) for name in SAFETY_DEFAULTS}
     if gain is not None:

@@ -191,13 +191,19 @@ sbatch --partition=gpu6000-short --account=scale-lab \
   --output=outputs/logs/gain_filter_%j.log tests/integration/gain_filter_pilot.sbatch
 ```
 
-The job verifies the gain derivative on the real model, then runs four complete
+The job runs the unit suite, then four complete
 eight-environment simulator rollout batches and 25 PPO gain-head updates per
 batch. No gradient passes through the QP during this training. The first eight
 development throws are excluded from training and used for paired evaluation;
 both checkpoints also receive 300-step ball-free standing checks. The report is
 saved as `outputs/analysis/gain_filter_pilot_JOBID.{md,json}`. This is a bounded
 pilot, not a replacement for the original SuperMimic training algorithm.
+
+Real-model derivative diagnostics run separately from the filter pilot. Job
+406177 found forward agreement but inaccurate coefficient derivatives at three
+failed/relaxed synthetic QP states. Do not treat the differentiable gain path as
+validated at those states. Unit finite differences on an active feasible QP
+pass; additional real-model checks must distinguish feasible and failed solves.
 
 Differentiable gain training is available through `scripts/train.py
 --adaptive_gain --method safetymimic`; the head then receives QP gradients and
