@@ -145,7 +145,7 @@ def test_reward_baseline_never_calls_qp_and_unfrozen_model_is_rejected():
         imagined_objective(*args, LossConfig(method="reward"))
 
 
-def test_external_filter_and_nominal_actor_updates_preserve_supermimic_gradient():
+def test_zero_weight_filter_and_nominal_actor_updates_preserve_supermimic_gradient():
     args = list(setup())
     args[2] = None
     other = (copy.deepcopy(args[0]), *args[1:])
@@ -160,7 +160,9 @@ def test_external_filter_and_nominal_actor_updates_preserve_supermimic_gradient(
     for module in args[0].parameter_groups().values():
         assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in module.parameters())
     for metrics in (baseline_metrics, filtered_metrics):
-        assert metrics["correction"] == metrics["qp_slack"] == metrics["baseline_avoidance"] == 0
+        assert metrics["correction"] == metrics["qp_slack"] == 0
+    assert baseline_metrics["baseline_avoidance"] == 0
+    assert filtered_metrics["baseline_avoidance"] > 0  # Raw penalty is reported even at zero weight.
     assert all(p.grad is None for p in args[1].parameters())
 
 
