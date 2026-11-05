@@ -173,6 +173,40 @@ critic, and preserve frozen model weights and normalizers. The script records
 the decision; it never submits 3,000 updates itself. Eight development throws
 are a pilot gate, not a general safety evaluation.
 
+## Adaptive class-K gain
+
+The optional shared class-K head predicts one coefficient per environment in
+`[0.05, 0.8]`, initialized to `0.2`. The action decoder keeps its original 29
+outputs. Both `SafetyLayer(...)` and `SafetyLayer.filter(...)` accept `gain=...`;
+the first retains its derivative and the second returns detached results.
+Adaptive checkpoints require the execution filter at evaluation, including
+checkpoints from differentiable training. Legacy fixed-gain checkpoints retain
+their existing deployment contract.
+
+For a gain-only filter pilot, with the pretrained nominal actor and world model
+frozen:
+
+```bash
+sbatch --partition=gpu6000-short --account=scale-lab \
+  --output=outputs/logs/gain_filter_%j.log tests/integration/gain_filter_pilot.sbatch
+```
+
+The job verifies the gain derivative on the real model, then runs four complete
+eight-environment simulator rollout batches and 25 PPO gain-head updates per
+batch. No gradient passes through the QP during this training. The first eight
+development throws are excluded from training and used for paired evaluation;
+both checkpoints also receive 300-step ball-free standing checks. The report is
+saved as `outputs/analysis/gain_filter_pilot_JOBID.{md,json}`. This is a bounded
+pilot, not a replacement for the original SuperMimic training algorithm.
+
+Differentiable gain training is available through `scripts/train.py
+--adaptive_gain --method safetymimic`; the head then receives QP gradients and
+the QP executes during collection and evaluation. The shared action and gain
+parameters are optimized in that mode. `--adaptive_gain --method filter` fails
+explicitly: its old imagined loss cannot train the gain head; use
+`scripts/train_gain_filter.py` instead. Long differentiable training is not part
+of the gain-only filter pilot.
+
 ## Initial configuration
 
 One node, **one Slurm task**, **two torchrun workers**:

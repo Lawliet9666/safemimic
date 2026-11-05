@@ -73,28 +73,40 @@ class SafetyLayer:
         augmented = clearance + self.config.velocity_time * weight * rate
         return torch.cat((clearance, augmented), -1) if self.config.geometric_constraint else augmented
 
-    def residual(self, state, ball, action, context):
+    def coefficient(self, gain, action):
+        if gain is None:
+            return self.config.alpha
+        if not isinstance(gain, torch.Tensor) or gain.shape != action.shape[:1]:
+            raise ValueError("Class-K gain must contain one coefficient per environment")
+        if not bool(torch.isfinite(gain).all() & (gain > 0).all() & (gain <= 1).all()):
+            raise ValueError("Class-K coefficients must be finite and in (0, 1]")
+        return gain[:, None]
+
+    def residual(self, state, ball, action, context, *, gain=None):
         following = self.dynamics.step(state, action, context)
-        return self.barrier(following, ball.step(self.config.dt)) - (1 - self.config.alpha) * self.barrier(
+        return self.barrier(following, ball.step(self.config.dt)) - (1 - self.coefficient(gain, action)) * self.barrier(
             state, ball
         )
 
-    def filter(self, state, ball, nominal, context, lower, upper):
+    def filter(self, state, ball, nominal, context, lower, upper, *, gain=None):
         """Execute a black-box filter, retaining only local action Jacobians.
 
         No actor/QP training graph escapes this call. Failed finite relaxed
         solutions retain their failure mask; they are never labeled safe.
         """
         with torch.no_grad():
-            result = self(state, ball, nominal, context, lower, upper)
+            result = self(state, ball, nominal, context, lower, upper, gain=gain)
         if not bool(torch.isfinite(result.qp.action).all()):
             raise RuntimeError("Nonfinite execution-filter action; simulator was not advanced")
         return result
 
-    def __call__(self, state, ball, nominal, context, lower, upper, backward="implicit"):
+    def __call__(self, state, ball, nominal, context, lower, upper, backward="implicit", *, gain=None):
         if backward not in {"implicit", "identity"}:
             raise ValueError("Backward must be implicit or identity")
         training_graph = torch.is_grad_enabled()
+        coefficient = self.coefficient(gain, nominal)
+        if not training_graph and isinstance(coefficient, torch.Tensor):
+            coefficient = coefficient.detach()
         with torch.enable_grad():
             # These quantities are invariant across local QPs and backtracking.
             # Cache their graphs as well as values; never detach state gradients.
@@ -103,7 +115,7 @@ class SafetyLayer:
 
             def evaluate(action):
                 following = self.dynamics.step(state, action, context)
-                return self.barrier(following, next_ball) - (1 - self.config.alpha) * current_barrier
+                return self.barrier(following, next_ball) - (1 - coefficient) * current_barrier
 
             linearization = nominal if nominal.requires_grad else nominal.detach().requires_grad_(True)
             best_qp = best_nonlinear = best_score = initial_residual = None

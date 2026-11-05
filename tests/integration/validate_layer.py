@@ -28,16 +28,20 @@ def main():
     add_safety_arguments(parser)
     parser.add_argument("--world_model", type=Path, default=ROOT / WORLD_MODEL_PATH)
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/results/layer_validation_current.json")
+    parser.add_argument("--adaptive_gain", action="store_true")
+    parser.add_argument("--gain_finite_difference", action="store_true", help="Check the new coefficient derivative only")
     parser.add_argument(
         "--finite_difference",
         action="store_true",
         help="Use float64 and check real-model action sensitivities along random directions",
     )
     args = parser.parse_args()
+    if args.gain_finite_difference and not args.adaptive_gain:
+        raise ValueError("Gain finite differences require --adaptive_gain")
     configure_runtime(profile=args.runtime, cpu_threads=args.cpu_threads)
     torch.manual_seed(17)
     device = "cuda:0"
-    dtype = torch.float64 if args.finite_difference else torch.float32
+    dtype = torch.float64 if args.finite_difference or args.gain_finite_difference else torch.float32
     torch.backends.cuda.matmul.allow_tf32 = False
     kin = G1Kinematics(device)
     motion = MotionLib.from_dir(str(ROOT / "data/standing"), kin, device)
@@ -82,19 +86,22 @@ def main():
     xi[:, 0] = 1
     lower = ((geometry.q_lo - mdp.default_q) / scale).clamp_min(-5)
     upper = ((geometry.q_hi - mdp.default_q) / scale).clamp_max(5)
+    gain = nominal.new_full((4,), args.alpha, requires_grad=True) if args.adaptive_gain else None
+    options = {} if gain is None else {"gain": gain}
     torch.cuda.synchronize()
     start = time.monotonic()
-    result = layer(state, ball, nominal, normalize_xi(xi), lower, upper)
+    result = layer(state, ball, nominal, normalize_xi(xi), lower, upper, **options)
     torch.cuda.synchronize()
     forward_seconds = time.monotonic() - start
     weights = torch.randn_like(nominal)
     start = time.monotonic()
-    gradient = torch.autograd.grad((result.qp.action * weights).sum(), nominal)[0]
+    gradients = torch.autograd.grad((result.qp.action * weights).sum(), (nominal,) if gain is None else (nominal, gain))
+    gradient = gradients[0]
     torch.cuda.synchronize()
     backward_seconds = time.monotonic() - start
     if not torch.isfinite(gradient).all():
         raise AssertionError("Nonfinite real-model safety-layer gradient")
-    surrogate = layer(state, ball, nominal, normalize_xi(xi), lower, upper, backward="identity")
+    surrogate = layer(state, ball, nominal, normalize_xi(xi), lower, upper, backward="identity", **options)
     forward_difference = float((surrogate.qp.action - result.qp.action).detach().abs().max())
     if forward_difference > 1e-6:
         raise AssertionError("Backward ablation changed the forward safety filter")
@@ -122,6 +129,28 @@ def main():
     report["geometric_constraint"] = True
     report["world_model"] = str(args.world_model)
     report["safety_settings"] = {name: getattr(args, name) for name in SAFETY_DEFAULTS}
+    if gain is not None:
+        report["gain_gradient"] = gradients[1].detach().tolist()
+        if not torch.isfinite(gradients[1]).all() or gradients[1].abs().sum() == 0:
+            raise AssertionError("Real-model gain derivative is nonfinite or inactive")
+        filtered = layer.filter(state, ball, nominal, normalize_xi(xi), lower, upper, gain=gain)
+        torch.testing.assert_close(filtered.qp.action, result.qp.action, atol=1e-5, rtol=1e-5)
+        if filtered.qp.action.requires_grad:
+            raise AssertionError("External filter retained a QP backward graph")
+        report["filter_forward_matches_differentiable"] = True
+        report["world_model_has_no_gradients"] = all(p.grad is None for p in model.parameters())
+    if args.gain_finite_difference:
+        epsilon = 1e-4
+        outputs = []
+        for sign in (-1, 1):
+            shifted = layer(state, ball, nominal, normalize_xi(xi), lower, upper,
+                            gain=gain.detach() + sign * epsilon)
+            outputs.append((shifted.qp.action * weights).sum(-1).detach())
+        numerical = (outputs[1] - outputs[0]) / (2 * epsilon)
+        error = (gradients[1] - numerical).abs() / (1 + numerical.abs())
+        report["gain_finite_difference"] = {"analytic": gradients[1].tolist(), "numerical": numerical.tolist(),
+                                             "max_normalized_error": float(error.max()),
+                                             "passed": bool((error < .02).all())}
     if args.finite_difference:
         errors, estimates = [], []
         epsilon = 1e-4
@@ -132,7 +161,7 @@ def main():
                 # Keep the same derivative construction mode as the reference.
                 # Do not compare a graph-enabled forward with a different path.
                 shifted = layer(
-                    state, ball, nominal.detach() + sign * epsilon * direction, normalize_xi(xi), lower, upper
+                    state, ball, nominal.detach() + sign * epsilon * direction, normalize_xi(xi), lower, upper, **options
                 )
                 outputs.append((shifted.qp.action * weights).sum(-1).detach())
             numerical = (outputs[1] - outputs[0]) / (2 * epsilon)
@@ -154,6 +183,8 @@ def main():
         raise AssertionError(
             "Real-model finite-difference check failed; inspect active-set degeneracy and conditioning"
         )
+    if args.gain_finite_difference and not report["gain_finite_difference"]["passed"]:
+        raise AssertionError("Real-model gain finite-difference check failed")
 
 
 if __name__ == "__main__":

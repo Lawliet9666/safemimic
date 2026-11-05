@@ -97,6 +97,7 @@ def main():
     sim_cfg.dt, sim_cfg.physics.num_substeps = 0.005, 1
     episodes, forward_times, actor_times, filter_times = [], [], [], []
     filter_actions = filter_failures = 0
+    gains = []
     transitions = 0
     torch.cuda.reset_peak_memory_stats()
 
@@ -127,6 +128,9 @@ def main():
                 "filter_batch_seconds_p95": float(np.quantile(filter_times, .95)) if filter_times else None,
                 "filter_actions": filter_actions, "filter_failures": filter_failures,
                 "filter_failure_rate": filter_failures / filter_actions if filter_actions else None,
+                "class_k_gain_mean": float(np.mean(gains)) if gains else None,
+                "class_k_gain_min": min(gains) if gains else None,
+                "class_k_gain_max": max(gains) if gains else None,
                 "filter_failure_execution": "finite relaxed QP action; never nominal fallback" if controller.safety else None,
                 "deployment": controller.metadata["deployment"],
             },
@@ -206,6 +210,9 @@ def main():
                             filter_times.append(filter_elapsed)
                             filter_actions += batch_size
                             filter_failures += int(filtered.failed[:batch_size].sum())
+                            value = controller.last_gain
+                            gains.extend(numpy(value[:batch_size]).tolist() if value is not None else
+                                         [controller.safety.config.alpha] * batch_size)
                         if not bool(torch.isfinite(nominal).all() & torch.isfinite(action).all()):
                             invalid = ~torch.isfinite(nominal).all(-1) | ~torch.isfinite(action).all(-1)
                             for index, item in enumerate(evidence):
@@ -250,6 +257,8 @@ def main():
                                 "controller_batch_seconds": elapsed,
                                 "filter_batch_seconds": filter_elapsed,
                                 "qp_failed": bool(filtered.failed[index]) if filtered else False,
+                                "class_k_gain": float(controller.last_gain[index]) if controller.last_gain is not None else
+                                                controller.safety.config.alpha if filtered else None,
                                 "qp_max_slack": float(filtered.qp.slack[index].max()) if filtered else 0.0,
                                 "root_height_m": float(actual_state[0][index, 2]),
                                 "root_tilt_cos": float(actual_state[1][index, 2, 2]),

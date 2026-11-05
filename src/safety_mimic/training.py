@@ -13,7 +13,9 @@ from .policy import ball_features
 OBJECTIVE_FORMAT = "safetymimic.supermimic_correction_slack.v1"
 
 
-def objective_format(method):
+def objective_format(method, adaptive_gain=False):
+    if adaptive_gain:
+        return f"safetymimic.adaptive_gain.{method}.v1"
     # Old filter snapshots optimized tracking alone and cannot resume this loss.
     return "safetymimic.filter_ball_avoidance.v1" if method == "filter" else OBJECTIVE_FORMAT
 
@@ -69,11 +71,14 @@ def actor_optimizer(policy, actor_lr, ball_lr):
     if any(not math.isfinite(value) or value <= 0 for value in (actor_lr, ball_lr)):
         raise ValueError("Actor and ball learning rates must be finite and positive")
     groups = policy.parameter_groups()
-    return torch.optim.Adam([
+    parameters = [
         {"params": groups["motion_encoder"].parameters(), "lr": actor_lr, "name": "motion_encoder"},
         {"params": groups["action_decoder"].parameters(), "lr": actor_lr, "name": "action_decoder"},
         {"params": groups["ball_encoder"].parameters(), "lr": ball_lr, "name": "ball_encoder"},
-    ], betas=(0.9, 0.95))
+    ]
+    if "gain_head" in groups:
+        parameters.append({"params": groups["gain_head"].parameters(), "lr": ball_lr, "name": "gain_head"})
+    return torch.optim.Adam(parameters, betas=(0.9, 0.95))
 
 
 def combine_critic_batches(batches):
@@ -153,7 +158,7 @@ def imagined_objective(
     for step in range(config.horizon):
         next_ball = ball.step(CONTROL_DT)
         next_frame = torch.minimum(frame + 1, motion.clip_end[0] - 1)
-        raw = policy(history, motion.goal(frame, 10), predicted, ball)
+        raw, gain = policy(history, motion.goal(frame, 10), predicted, ball, return_gain=True)
         metrics["action_saturation"] = metrics["action_saturation"] + (
             (raw < lower) | (raw > upper)
         ).float().mean()
@@ -162,7 +167,8 @@ def imagined_objective(
             executed = raw.clamp(lower, upper)
         else:
             backward = "identity" if config.method == "identity" else "implicit"
-            result = safety(predicted, ball, raw, context, lower, upper, backward=backward)
+            options = {} if gain is None else {"gain": gain}
+            result = safety(predicted, ball, raw, context, lower, upper, backward=backward, **options)
             executed = result.qp.action
             # A failed/relaxed action is not a validated safety teacher. Its
             # finite trajectory and differentiable slack still inform training.

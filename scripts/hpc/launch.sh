@@ -24,6 +24,7 @@ else
     --baseline_avoidance_weight "${AVOIDANCE_WEIGHT:-10}"
     --warmup_steps "${WARMUP_STEPS:-256}" --replay_steps "${REPLAY_STEPS:-1000}"
     --seed "${SEED:-0}" --method "${METHOD:-safetymimic}")
+  if [[ "${ADAPTIVE_GAIN:-0}" == 1 ]]; then training+=(--adaptive_gain); fi
 fi
 # CUDA_VISIBLE_DEVICES is supplied by Slurm and deliberately preserved.
 exec "$python_executable" -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node=2 \

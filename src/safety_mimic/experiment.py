@@ -48,9 +48,10 @@ class Controller:
         self.geometry = CollisionGeometry(
             self.root / "vendor/supermimic/data/g1_description/g1_29dof.xml", G1_JOINT_NAMES, device=device
         )
-        self.last_filter_result = None
+        self.last_filter_result = self.last_gain = None
         self.safety = self.world_model_path = None
-        use_filter = self.method == "filter" if execution_filter is None else execution_filter
+        contract = saved.get("deployment", {"uses_qp": self.method == "filter"})
+        use_filter = contract["uses_qp"] if execution_filter is None else execution_filter
         if world_model is not None and not use_filter:
             raise ValueError("A deployment world model requires the execution filter")
         if use_filter:
@@ -84,15 +85,18 @@ class Controller:
         state, ball = env.state(), env.ball_state()
         observation = self.mdp.obs(state, env.a_prev, env.xi, env.f)
         history = update_history(history, observation, env.ep_step == 0)
-        return self.policy(history, self.motion.goal(env.f, 10), state, ball), history
+        action, self.last_gain = self.policy.forward_with_gain(history, self.motion.goal(env.f, 10), state, ball)
+        return action, history
 
     def execute(self, env, nominal):
         lower, upper = self.bounds(env)
         action = nominal.clamp(lower, upper)
         self.last_filter_result = None
         if self.safety is not None:
+            if self.policy.gain_head is not None and self.last_gain is None:
+                raise RuntimeError("Compute the nominal action and adaptive gain before execution")
             self.last_filter_result = self.safety.filter(
-                env.state(), env.ball_state(), action, normalize_xi(env.xi), lower, upper
+                env.state(), env.ball_state(), action, normalize_xi(env.xi), lower, upper, gain=self.last_gain
             )
             action = self.last_filter_result.qp.action
         return action

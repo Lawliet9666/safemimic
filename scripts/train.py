@@ -29,6 +29,7 @@ parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
 parser.add_argument("--horizon", type=int, default=32)
 parser.add_argument("--actor_lr", type=float, default=1e-5)
 parser.add_argument("--ball_lr", type=float, default=5e-5)
+parser.add_argument("--adaptive_gain", action="store_true", help="Train an actor-predicted bounded CBF coefficient")
 parser.add_argument("--critic_lr", type=float, default=1e-4)
 parser.add_argument("--gamma", type=float, default=0.99)
 parser.add_argument("--gae_lambda", type=float, default=0.95)
@@ -86,7 +87,8 @@ def main():
             resolve_artifact(ROOT, args.resume), rank=int(os.environ.get("RANK", 0)),
             world_size=int(os.environ.get("WORLD_SIZE", 1)),
         )
-        if restored["config"]["objective"] != objective_format(restored["config"]["method"]):
+        if restored["config"]["objective"] != objective_format(
+            restored["config"]["method"], restored["config"].get("adaptive_gain", False)):
             raise ValueError("Checkpoint training objective differs from the current trainer")
         latest = manifest.parents[2] / "checkpoints/latest.json"
         if latest.exists() and (latest.parent / json.loads(latest.read_text())["checkpoint"]).resolve() != manifest:
@@ -113,6 +115,8 @@ def main():
     try:
         if not output.is_relative_to(ROOT / "outputs/runs"):
             raise ValueError("Training output must be inside outputs/runs")
+        if args.adaptive_gain and args.method not in {"safetymimic", "identity"}:
+            raise ValueError("For adaptive gains without QP backpropagation use scripts/train_gain_filter.py")
         if restored and output != manifest.parents[2]:
             raise ValueError("Resume in the original run directory")
         if restored and args.updates < restored["update"]:
@@ -143,7 +147,7 @@ def main():
     networks.AMP_DTYPE = None
     pretrained = resolve_artifact(ROOT, args.pretrained)
     model_path = resolve_artifact(ROOT, args.world_model)
-    policy = BallConditionedPolicy.from_pretrained(pretrained, device=device).train()
+    policy = BallConditionedPolicy.from_pretrained(pretrained, device=device, adaptive_gain=args.adaptive_gain).train()
     model_record = torch.load(model_path, map_location=device, weights_only=True)
     world_model = WorldModel(hidden=model_record["hidden"]).to(device).eval().requires_grad_(False)
     world_model.load_state_dict(model_record["wm"], strict=True)
@@ -178,10 +182,10 @@ def main():
         "anticipation_mode", "alpha", "residual_margin", "trust_radius",
     )})
     imagined_filter = args.method in {"safetymimic", "identity"}
-    execution_filter = args.method == "filter"
+    execution_filter = args.method == "filter" or args.adaptive_gain
     safety = SafetyLayer(world_model, geometry, safety_config) if imagined_filter or execution_filter else None
     config.update(
-        imagined_rollouts=1, objective=objective_format(args.method), training_uses_qp=safety is not None,
+        imagined_rollouts=1, objective=objective_format(args.method, args.adaptive_gain), training_uses_qp=safety is not None,
         loss=asdict(loss_config), safety=asdict(safety_config), collection_uses_qp=execution_filter,
         deployment_uses_qp=execution_filter, imagined_uses_qp=imagined_filter,
         qp_training_gradient=imagined_filter, terminal_critic=True,
@@ -232,7 +236,7 @@ def main():
             "world_size": distribution.world_size, "global_batch_size": config["global_batch_size"],
             "world_model_frozen": True, "world_model_sha256_initial": initial_model_hash,
             "initial_parameter_group_sha256": initial_groups, "imagined_rollouts": 1,
-            "objective": objective_format(args.method), "training_uses_qp": safety is not None,
+            "objective": objective_format(args.method, args.adaptive_gain), "training_uses_qp": safety is not None,
             "all_actor_parameters_trainable": all(p.requires_grad for p in policy.parameters()),
             "normalization_frozen": True, "terminal_critic": True,
             "collection_uses_qp": execution_filter, "deployment_uses_qp": execution_filter,
@@ -283,7 +287,7 @@ def main():
                 observation = mdp.obs(state, env.a_prev, env.xi, env.f)
                 history = update_history(history, observation, env.ep_step == 0)
                 lower, upper = action_bounds(geometry, env)
-                raw = policy(history, motion.goal(env.f, 10), state, ball)
+                raw, gain = policy.forward_with_gain(history, motion.goal(env.f, 10), state, ball)
                 noise = args.exploration_noise * torch.randn(raw.shape, device=device, generator=generator)
                 action = (raw + noise).clamp(lower, upper)
                 if not bool(torch.isfinite(raw).all() & torch.isfinite(action).all()):
@@ -291,7 +295,7 @@ def main():
                 if execution_filter:
                     torch.cuda.synchronize(device)
                     tick_filter = time.monotonic()
-                    filtered = safety.filter(state, ball, action, normalize_xi(env.xi), lower, upper)
+                    filtered = safety.filter(state, ball, action, normalize_xi(env.xi), lower, upper, gain=gain)
                     torch.cuda.synchronize(device)
                     filter_seconds += time.monotonic() - tick_filter
                     failed_actions += float(filtered.failed.sum())
