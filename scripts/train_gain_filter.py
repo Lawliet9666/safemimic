@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
+from safety_mimic.tracking import RunTracker, add_tracking_arguments
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -28,6 +29,7 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--learning_rate", type=float, default=1e-4)
 parser.add_argument("--std", type=float, default=0.4, help="Exploration in pre-sigmoid gain coordinates")
 parser.add_argument("--gamma", type=float, default=0.99)
+add_tracking_arguments(parser)
 add_launcher_args(parser)
 args = parser.parse_args()
 
@@ -111,7 +113,9 @@ def main():
     steps = round(manifest["episode_seconds"] / manifest["control_dt"])
     if abs(steps * 0.02 - manifest["episode_seconds"]) > 1e-8:
         raise ValueError("Pilot requires the established 50 Hz control interface")
+    tracker = None
     try:
+        tracker = RunTracker.from_args(output, config, args)
         with launch_simulation(sim_cfg, args):
             env = DodgeballSim(sim_cfg, args.num_envs, controller.motion, controller.mdp, controller.geometry,
                                seed=args.seed, diagnostics=False)
@@ -170,6 +174,7 @@ def main():
                 with (output / "rollouts.jsonl").open("a") as stream:
                     stream.write(json.dumps(rollout, allow_nan=False) + "\n")
                 print("ROLLOUT " + json.dumps(rollout), flush=True)
+                tracker.log_rollout(rollout, updates)
                 for _ in range(args.updates_per_round):
                     indices = torch.randperm(len(latents), device=device, generator=generator)[:args.minibatch]
                     tick_update = time.monotonic()
@@ -189,6 +194,7 @@ def main():
                     with (output / "metrics.jsonl").open("a") as stream:
                         stream.write(json.dumps(row, allow_nan=False) + "\n")
                     dump_json(output / "progress.json", row)
+                    tracker.log_training(row)
                 save()
                 dump_json(output / "STATUS.json", metadata("running"))
         checks = {
@@ -207,8 +213,11 @@ def main():
             raise RuntimeError("Gain-only pilot contract failed; inspect checks.json")
         save_policy(output / "policy.pt", policy, config=config, training=metadata("complete"))
         dump_json(output / "STATUS.json", metadata("complete"))
+        tracker.finish("complete", checks=checks)
     except BaseException as error:
         dump_json(output / "STATUS.json", {**metadata("incomplete"), "error": repr(error)})
+        if tracker is not None:
+            tracker.fail(error)
         raise
 
 

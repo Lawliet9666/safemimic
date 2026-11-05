@@ -261,6 +261,50 @@ backward passes and **before** clipping/Adam. This avoids distributed reducer
 hooks inside the QP's nested Jacobian calculations. The critic uses globally
 gathered normalization data and synchronized gradients as well.
 
+## W&B training curves
+
+Both trainers support optional W&B logging. Only rank 0 creates a run in
+distributed training. Local JSON metrics remain authoritative and are retained.
+Install the optional SDK in the HPC environment and authenticate directly in
+the terminal; do not place an API key in source files or Slurm arguments:
+
+```bash
+scripts/hpc/python.sh -m pip install 'wandb>=0.31,<0.32'
+scripts/hpc/python.sh -m wandb login
+scripts/hpc/python.sh scripts/log_wandb.py --check_account
+```
+
+The account email and the W&B entity (username/team) are different settings.
+Use the entity returned by the account check. For future submissions, set:
+
+```bash
+export WANDB_MODE=online
+export WANDB_PROJECT=safetymimic
+export WANDB_ENTITY=YOUR_WANDB_ENTITY
+```
+
+`WANDB_EXPECTED_EMAIL` optionally verifies account identity before upload.
+Training logs include loss, gradients, actor/gain statistics, return, QP
+failures and timing. The gain pilot appends paired evaluation and standing
+summaries to the same run after evaluation. Completion and the physical
+performance gate are separate fields: a completed job can still have `hold`.
+Exceptions finish W&B with a nonzero exit code.
+
+Saved JSON curves can be uploaded without running simulation:
+
+```bash
+scripts/hpc/python.sh scripts/log_wandb.py \
+  --run outputs/runs/gain_filter_406178 --wandb_mode online \
+  --assessment outputs/analysis/gain_filter_pilot_406178.json
+```
+
+`wandb_run.json` retains the run ID and URL. If that identity already exists,
+use `--resume` to append evaluation without duplicating training history.
+Online training resumes the same saved W&B run; backfill an older untracked
+run before enabling resumed logging. Explicit `WANDB_MODE=offline` records
+locally for later `wandb sync`; offline W&B resume is rejected. Logging is
+disabled when no mode is selected, and the SDK is not imported in that mode.
+
 ## Resume and preemption
 
 ```bash

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from isaaclab.app import add_launcher_args, launch_simulation
 from safety_mimic.settings import WORLD_MODEL_PATH, add_safety_arguments
+from safety_mimic.tracking import RunTracker, add_tracking_arguments
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -46,6 +47,7 @@ parser.add_argument("--collection_steps", type=int, default=1)
 parser.add_argument("--checkpoint_updates", default="0,100,300,1000,3000")
 parser.add_argument("--checkpoint_every", type=int, default=100)
 parser.add_argument("--stop_file", type=Path)
+add_tracking_arguments(parser)
 add_safety_arguments(parser)
 parser.add_argument("--correction_weight", type=float, default=1)
 parser.add_argument("--slack_weight", type=float, default=10, help="Auxiliary loss weight; QP penalty stays 1e4")
@@ -93,7 +95,8 @@ def main():
         latest = manifest.parents[2] / "checkpoints/latest.json"
         if latest.exists() and (latest.parent / json.loads(latest.read_text())["checkpoint"]).resolve() != manifest:
             raise ValueError("Resume the published latest checkpoint; rollback would duplicate run metrics")
-        operational = {"resume", "output", "updates", "runtime", "cpu_threads", "device", "stop_file"}
+        operational = {"resume", "output", "updates", "runtime", "cpu_threads", "device", "stop_file",
+                       "wandb_mode", "wandb_project", "wandb_entity", "wandb_name", "wandb_expected_email"}
         explicit = {word.split("=")[0] for word in sys.argv[1:] if word.startswith("--")}
         for action in parser._actions:
             key = action.dest
@@ -340,11 +343,16 @@ def main():
 
     sim_cfg = make_sim(device, args)
     sim_cfg.dt, sim_cfg.physics.num_substeps = 0.005, 1
+    tracker = None
     try:
         primary_io(lambda: dump_json(output / "STATUS.json", {"status": "running", **metadata()}))
         primary_io(lambda: dump_json(output / ("resume_config.json" if restored else "config.json"), config))
         write_provenance(output, ROOT, [pretrained / "policy.safetensors", model_path],
                          filename=f"provenance_rank{distribution.rank}_{time.time_ns()}.json")
+        def start_tracking():
+            nonlocal tracker
+            tracker = RunTracker.from_args(output, config, args, resume=restored is not None)
+        primary_io(start_tracking)
         with launch_simulation(sim_cfg, args):
             env = DodgeballSim(
                 sim_cfg, args.num_envs, motion, mdp, geometry, seed=data_seed,
@@ -438,6 +446,7 @@ def main():
                         stream.write(json.dumps(row, allow_nan=False) + "\n")
                     dump_json(output / "progress.json", row)
                     print(json.dumps(row, allow_nan=False), flush=True)
+                    tracker.log_training(row)
                 primary_io(record)
                 if updates in checkpoints or (args.checkpoint_every and updates % args.checkpoint_every == 0):
                     save(env)
@@ -459,10 +468,13 @@ def main():
         primary_io(lambda: dump_json(output / ("STOPPED.json" if stopped else "COMPLETE.json"),
                                      {**metadata(), "checks": checks, "resumed_from": str(manifest) if manifest else None}))
         primary_io(lambda: dump_json(output / "STATUS.json", {"status": "stopped" if stopped else "complete", **metadata()}))
+        primary_io(lambda: tracker.finish("stopped" if stopped else "complete", checks=checks))
     except BaseException as failure:
         dump_json(output / f"INCOMPLETE_rank{distribution.rank}.json", {**metadata(), "error": repr(failure)})
         if distribution.primary:
             dump_json(output / "STATUS.json", {"status": "incomplete", **metadata(), "error": repr(failure)})
+            if tracker is not None:
+                tracker.fail(failure)
         raise
     finally:
         distribution.close()

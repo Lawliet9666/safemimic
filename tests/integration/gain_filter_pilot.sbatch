@@ -42,4 +42,8 @@ for phase in before after; do
 done
 run_step "$python_executable" tests/integration/summarize_gain_pilot.py --run "$run" \
   --output "outputs/analysis/gain_filter_pilot_${SLURM_JOB_ID}"
+if [[ "${WANDB_MODE:-disabled}" == online ]]; then
+  run_step "$python_executable" scripts/log_wandb.py --run "$run" --wandb_mode online --resume \
+    --assessment "outputs/analysis/gain_filter_pilot_${SLURM_JOB_ID}.json"
+fi
 echo "GAIN_PILOT_COMPLETE: outputs/analysis/gain_filter_pilot_${SLURM_JOB_ID}.md"
