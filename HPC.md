@@ -199,11 +199,21 @@ both checkpoints also receive 300-step ball-free standing checks. The report is
 saved as `outputs/analysis/gain_filter_pilot_JOBID.{md,json}`. This is a bounded
 pilot, not a replacement for the original SuperMimic training algorithm.
 
+Pilot 406178 completed 100 gain-head updates with the original actor and model
+unchanged. Paired evaluation retained 2/8 successful dodges and zero falls, but
+filter failures increased from 163/1,200 to 189/1,200. Standing passed before and
+after training. The result is hold; it does not justify longer training yet.
+
 Real-model derivative diagnostics run separately from the filter pilot. Job
 406177 found forward agreement but inaccurate coefficient derivatives at three
 failed/relaxed synthetic QP states. Do not treat the differentiable gain path as
-validated at those states. Unit finite differences on an active feasible QP
-pass; additional real-model checks must distinguish feasible and failed solves.
+validated at those states. A milder full-filter check (406179) also found one
+unstable derivative at a feasible solution, while two active cases matched
+closely. Repeating the full-filter check at coefficient `0.21` (406181) retained
+the mismatch at that state. The real-model single-local-QP check (406180) passed, with maximum
+normalized error `3.83e-6`. The gain connection is verified through the local
+QP; the full iterative filter still needs derivative-stability work. These
+limitations do not change the score-function filter trainer's gradient route.
 
 Differentiable gain training is available through `scripts/train.py
 --adaptive_gain --method safetymimic`; the head then receives QP gradients and
